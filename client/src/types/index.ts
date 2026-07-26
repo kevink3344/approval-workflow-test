@@ -77,6 +77,13 @@ export type WorkflowStatus = 'active' | 'archived';
 export type ResolutionMode = 'first' | 'all';
 export type ColumnType = 'text' | 'long_text' | 'single_choice' | 'multiple_choice' | 'date' | 'file';
 
+export interface ApprovalSlotConfig {
+  id?: string;
+  groupId: string;
+  resolutionMode: ResolutionMode;
+  slotOrder?: number;
+}
+
 export interface WorkflowColumn {
   id: string;
   workflowId: string;
@@ -109,7 +116,7 @@ export interface Workflow {
   description: string;
   createdBy: string;
   status: WorkflowStatus;
-  steps?: { id: string; order: number; approverId: string }[];
+  steps?: { id: string; order: number; approverId: string; approverName?: string }[];
   slots?: WorkflowApprovalSlot[];
   columns?: WorkflowColumn[];
   organizationId?: string | null;

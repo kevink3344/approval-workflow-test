@@ -357,8 +357,8 @@ export default function WorkflowEdit() {
                       <option value="">Select a group...</option>
                       {groups?.map((g) => (
                         <option key={g.id} value={g.id}>
-                          {g.name} ({g.members.length} member
-                          {g.members.length !== 1 ? 's' : ''})
+                          {g.name} ({g.members?.length ?? 0} member
+                          {(g.members?.length ?? 0) !== 1 ? 's' : ''})
                         </option>
                       ))}
                     </select>

@@ -163,7 +163,7 @@ export default function Dashboard() {
               />
             </div>
             <div className="flex items-center gap-2">
-              {req.steps.map((step) => (
+              {req.steps?.map((step) => (
                 <div
                   key={step.id}
                   className={`w-6 h-6 rounded-full border-2 flex items-center justify-center text-xs ${
@@ -232,7 +232,7 @@ export default function Dashboard() {
 
             {/* Steps grouped by slot */}
             {(() => {
-              const slotMap = groupStepsBySlot(selectedRequest.steps);
+              const slotMap = groupStepsBySlot(selectedRequest.steps || []);
               const sortedSlots = Array.from(slotMap.entries()).sort((a, b) => a[0] - b[0]);
 
               return sortedSlots.map(([slotOrder, steps]) => {

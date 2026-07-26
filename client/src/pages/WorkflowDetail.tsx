@@ -211,9 +211,9 @@ export default function WorkflowDetail() {
 
         <p className="text-xs text-[--text-muted]">
           Created {new Date(workflow.createdAt).toLocaleDateString()}
-          {hasSlots && <> &middot; {workflow.slots.length} slot{workflow.slots.length !== 1 ? 's' : ''}</>}
-          {!hasSlots && hasSteps && <> &middot; {workflow.steps.length} step{workflow.steps.length !== 1 ? 's' : ''}</>}
-          {hasColumns && <> &middot; {workflow.columns.length} field{workflow.columns.length !== 1 ? 's' : ''}</>}
+          {hasSlots && <> &middot; {workflow.slots!.length} slot{workflow.slots!.length !== 1 ? 's' : ''}</>}
+          {!hasSlots && hasSteps && <> &middot; {workflow.steps!.length} step{workflow.steps!.length !== 1 ? 's' : ''}</>}
+          {hasColumns && <> &middot; {workflow.columns!.length} field{workflow.columns!.length !== 1 ? 's' : ''}</>}
         </p>
       </div>
 
@@ -222,7 +222,7 @@ export default function WorkflowDetail() {
         <div className="surface p-6 mb-6">
           <h3 className="text-lg font-semibold text-[--text] mb-4">Custom Fields</h3>
           <div className="space-y-2">
-            {workflow.columns.map((col) => (
+            {workflow.columns!.map((col) => (
               <div key={col.id} className="flex items-baseline gap-2 py-2 px-3 surface-muted">
                 <span className="text-sm font-medium text-[--text] w-40 shrink-0">
                   {col.label}
@@ -245,7 +245,7 @@ export default function WorkflowDetail() {
         <div className="surface p-6 mb-6">
           <h3 className="text-lg font-semibold text-[--text] mb-4">Approval Slots</h3>
           <div className="space-y-3">
-            {workflow.slots.map((slot) => (
+            {workflow.slots!.map((slot) => (
               <div key={slot.id || slot.slotOrder} className="flex items-center gap-4 py-3 px-4 surface-muted">
                 <div className="w-8 h-8 rounded-full bg-accent/10 flex items-center justify-center text-accent font-semibold text-sm">
                   {slot.slotOrder || 1}
@@ -270,7 +270,7 @@ export default function WorkflowDetail() {
         <div className="surface p-6 mb-6">
           <h3 className="text-lg font-semibold text-[--text] mb-4">Approval Steps</h3>
           <div className="space-y-3">
-            {workflow.steps
+            {workflow.steps!
               .sort((a, b) => a.order - b.order)
               .map((step) => (
                 <div key={step.id} className="flex items-center gap-4 py-3 px-4 surface-muted">
@@ -298,7 +298,7 @@ export default function WorkflowDetail() {
         <div className="surface p-6 mb-6">
           <h3 className="text-lg font-semibold text-[--text] mb-4">Complete Request Details</h3>
           <div className="space-y-1">
-            {workflow.columns.map((col) => {
+            {workflow.columns!.map((col) => {
               const val = fieldValues[col.id] || '';
               const err = fieldErrors[col.id];
               const isUploading = uploadingFiles[col.id];

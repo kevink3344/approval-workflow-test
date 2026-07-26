@@ -35,7 +35,7 @@ export default function ApprovalGroups() {
   const openEdit = (group: ApprovalGroup) => {
     setName(group.name);
     setDescription(group.description);
-    setSelectedMemberIds(group.members.map((m) => m.id));
+    setSelectedMemberIds(group.members?.map((m) => m.id) ?? []);
     setEditingGroup(group);
     setShowForm(true);
   };
@@ -205,7 +205,7 @@ export default function ApprovalGroups() {
                   <p className="text-sm text-[--text-muted] mt-1">{group.description}</p>
                 )}
                 <div className="flex flex-wrap gap-1 mt-3">
-                  {group.members.map((m) => (
+                  {group.members?.map((m) => (
                     <span
                       key={m.id}
                       className="inline-flex items-center gap-1 px-2 py-0.5 text-xs rounded-sm"
@@ -214,12 +214,12 @@ export default function ApprovalGroups() {
                       {m.name}
                     </span>
                   ))}
-                  {group.members.length === 0 && (
+                  {(group.members?.length ?? 0) === 0 && (
                     <span className="text-xs text-[--text-muted] italic">No members</span>
                   )}
                 </div>
                 <p className="text-xs text-[--text-muted] mt-3">
-                  {group.members.length} member{group.members.length !== 1 ? 's' : ''} &middot;{' '}
+                  {group.members?.length ?? 0} member{(group.members?.length ?? 0) !== 1 ? 's' : ''} &middot;{' '}
                   Created {new Date(group.createdAt).toLocaleDateString()}
                 </p>
               </div>
