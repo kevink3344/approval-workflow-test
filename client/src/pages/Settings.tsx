@@ -3,7 +3,7 @@ import { Link } from 'react-router-dom';
 import { useAuth } from '../hooks/useAuth';
 import apiClient from '../api/client';
 import { getPublicSetting, updateSetting } from '../api/settings';
-import type { LoginMode, InfoResponse } from '../types';
+import type { LoginMode, InfoResponse, Organization } from '../types';
 
 const LOGIN_MODE_LABELS: Record<LoginMode, string> = {
   select: 'Select User (Test)',
@@ -12,7 +12,20 @@ const LOGIN_MODE_LABELS: Record<LoginMode, string> = {
 };
 
 export default function Settings() {
-  const { user, isAdmin } = useAuth();
+  const { user, isAdmin, isSuperAdmin } = useAuth();
+
+  // Organization management state
+  const [organizations, setOrganizations] = useState<Organization[]>([]);
+  const [orgsLoading, setOrgsLoading] = useState(false);
+  const [orgFormOpen, setOrgFormOpen] = useState(false);
+  const [orgName, setOrgName] = useState('');
+  const [orgSlug, setOrgSlug] = useState('');
+  const [orgAdminEmail, setOrgAdminEmail] = useState('');
+  const [orgAdminPassword, setOrgAdminPassword] = useState('');
+  const [orgSaving, setOrgSaving] = useState(false);
+  const [orgError, setOrgError] = useState('');
+  const [orgSuccess, setOrgSuccess] = useState('');
+  const [deletingOrgId, setDeletingOrgId] = useState<string | null>(null);
 
   // Profile state
   const [name, setName] = useState(user?.name || '');
@@ -61,7 +74,6 @@ export default function Settings() {
         // ignore
       }
 
-      // Fetch info override separately
       try {
         const infoRes = await apiClient.get<InfoResponse>('/info');
         setLoginModeOverride(infoRes.data.loginModeOverride);
@@ -72,6 +84,90 @@ export default function Settings() {
 
     fetchLoginMode();
   }, []);
+
+  // Fetch organizations for super admins
+  useEffect(() => {
+    if (!isSuperAdmin) return;
+
+    async function fetchOrgs() {
+      setOrgsLoading(true);
+      try {
+        const res = await apiClient.get<Organization[]>('/organizations?includeUserCount=true');
+        setOrganizations(res.data);
+      } catch {
+        // ignore
+      } finally {
+        setOrgsLoading(false);
+      }
+    }
+
+    fetchOrgs();
+  }, [isSuperAdmin, orgSuccess]);
+
+  const generateSlug = (name: string) => {
+    return name
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, '-')
+      .replace(/^-+|-+$/g, '');
+  };
+
+  const handleOrgNameChange = (value: string) => {
+    setOrgName(value);
+    if (!orgSlug || orgSlug === generateSlug(orgName)) {
+      setOrgSlug(generateSlug(value));
+    }
+  };
+
+  const handleCreateOrg = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setOrgError('');
+    setOrgSuccess('');
+    setOrgSaving(true);
+
+    try {
+      const payload: Record<string, string> = {
+        name: orgName.trim(),
+        slug: orgSlug.trim().toLowerCase(),
+      };
+      if (orgAdminEmail.trim()) {
+        payload.adminEmail = orgAdminEmail.trim();
+        payload.adminName = orgAdminEmail.trim();
+        payload.adminPassword = orgAdminPassword || 'changeme123';
+      }
+      await apiClient.post('/organizations', payload);
+      setOrgSuccess(`Organization "${orgName}" created successfully.`);
+      setOrgFormOpen(false);
+      setOrgName('');
+      setOrgSlug('');
+      setOrgAdminEmail('');
+      setOrgAdminPassword('');
+    } catch (err: unknown) {
+      const axiosErr = err as { response?: { data?: { message?: string } } };
+      setOrgError(axiosErr.response?.data?.message || 'Failed to create organization.');
+    } finally {
+      setOrgSaving(false);
+    }
+  };
+
+  const handleDeleteOrg = async (orgId: string, orgName: string) => {
+    if (!confirm(`Are you sure you want to delete "${orgName}" and ALL associated data? This cannot be undone.`)) {
+      return;
+    }
+
+    setDeletingOrgId(orgId);
+    setOrgError('');
+    setOrgSuccess('');
+    try {
+      await apiClient.delete(`/organizations/${orgId}`);
+      setOrganizations((prev) => prev.filter((o) => o.id !== orgId));
+      setOrgSuccess(`Organization "${orgName}" deleted.`);
+    } catch (err: unknown) {
+      const axiosErr = err as { response?: { data?: { message?: string } } };
+      setOrgError(axiosErr.response?.data?.message || 'Failed to delete organization.');
+    } finally {
+      setDeletingOrgId(null);
+    }
+  };
 
   const handleSaveProfile = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -126,7 +222,6 @@ export default function Settings() {
       setSuccess('');
       try {
         await updateSetting('login_mode', nextMode);
-        // If switching away from maintenance, clear draft
         if (nextMode !== 'maintenance') {
           setMaintenanceDraft('');
           setMaintenanceSaved(false);
@@ -188,12 +283,142 @@ export default function Settings() {
       )}
 
       <div className="grid gap-6">
-        {/* Login Mode — admin only */}
+        {/* ── Organizations — Super Admin Only ─────────────────── */}
+        {isSuperAdmin && (
+          <div className="surface p-6">
+            <div className="flex items-center justify-between mb-4">
+              <h3 className="text-lg font-semibold text-[--text]">Organizations</h3>
+              <button
+                type="button"
+                className="primary-button text-sm"
+                onClick={() => setOrgFormOpen(!orgFormOpen)}
+              >
+                {orgFormOpen ? 'Cancel' : '+ New Organization'}
+              </button>
+            </div>
+
+            {orgSuccess && (
+              <div
+                className="mb-4 p-3 rounded-sm text-sm"
+                style={{ background: '#e6fff0', color: '#1e8c52', border: '1px solid #96e0b0' }}
+              >
+                {orgSuccess}
+              </div>
+            )}
+
+            {orgError && (
+              <div
+                className="mb-4 p-3 rounded-sm text-sm"
+                style={{ background: '#ffe8ea', color: '#ba3040', border: '1px solid #ffb1b8' }}
+              >
+                {orgError}
+              </div>
+            )}
+
+            {/* Create Organization Form */}
+            {orgFormOpen && (
+              <form onSubmit={handleCreateOrg} className="mb-6 p-4 bg-[--app-bg] rounded-sm border border-[--border]">
+                <div className="grid gap-4 sm:grid-cols-2">
+                  <div className="field">
+                    <label className="field-label">Organization Name *</label>
+                    <input
+                      className="input-control"
+                      placeholder="Acme Corporation"
+                      value={orgName}
+                      onChange={(e) => handleOrgNameChange(e.target.value)}
+                      required
+                    />
+                  </div>
+                  <div className="field">
+                    <label className="field-label">Slug *</label>
+                    <input
+                      className="input-control"
+                      placeholder="acme-corporation"
+                      value={orgSlug}
+                      onChange={(e) => setOrgSlug(e.target.value)}
+                      required
+                    />
+                    <span className="text-xs text-[--text-muted]">URL-friendly identifier</span>
+                  </div>
+                  <div className="field">
+                    <label className="field-label">Admin Email (optional)</label>
+                    <input
+                      type="email"
+                      className="input-control"
+                      placeholder="admin@acme.local"
+                      value={orgAdminEmail}
+                      onChange={(e) => setOrgAdminEmail(e.target.value)}
+                    />
+                  </div>
+                  <div className="field">
+                    <label className="field-label">Admin Password (optional)</label>
+                    <input
+                      type="password"
+                      className="input-control"
+                      placeholder="Default: changeme123"
+                      value={orgAdminPassword}
+                      onChange={(e) => setOrgAdminPassword(e.target.value)}
+                    />
+                  </div>
+                </div>
+                <button type="submit" className="primary-button mt-4" disabled={orgSaving}>
+                  {orgSaving ? 'Creating...' : 'Create Organization'}
+                </button>
+              </form>
+            )}
+
+            {/* Organization List */}
+            {orgsLoading ? (
+              <p className="text-sm text-[--text-muted]">Loading organizations...</p>
+            ) : organizations.length === 0 ? (
+              <p className="text-sm text-[--text-muted]">No organizations found.</p>
+            ) : (
+              <div className="overflow-x-auto">
+                <table className="w-full text-sm">
+                  <thead>
+                    <tr className="border-b border-[--border] text-left text-[--text-muted]">
+                      <th className="py-2 pr-4 font-medium">Name</th>
+                      <th className="py-2 pr-4 font-medium">Slug</th>
+                      <th className="py-2 pr-4 font-medium">Users</th>
+                      <th className="py-2 pr-4 font-medium">Status</th>
+                      <th className="py-2 font-medium w-24">Actions</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {organizations.map((org) => (
+                      <tr key={org.id} className="border-b border-[--border]">
+                        <td className="py-2 pr-4">{org.name}</td>
+                        <td className="py-2 pr-4 text-[--text-muted]">{org.slug}</td>
+                        <td className="py-2 pr-4">{org.userCount ?? '-'}</td>
+                        <td className="py-2 pr-4">
+                          <span className={`badge ${org.isActive ? 'badge-green' : 'badge-red'}`}>
+                            {org.isActive ? 'Active' : 'Inactive'}
+                          </span>
+                        </td>
+                        <td className="py-2">
+                          <button
+                            type="button"
+                            className="text-xs px-3 py-1 rounded-sm border border-red-300 text-red-600 hover:bg-red-50 disabled:opacity-50"
+                            disabled={deletingOrgId === org.id}
+                            onClick={() => handleDeleteOrg(org.id, org.name)}
+                          >
+                            {deletingOrgId === org.id ? '...' : 'Delete'}
+                          </button>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* ── Login Mode — admin only ──────────────────────────── */}
         {isAdmin && (
           <div className="surface p-6">
             <h3 className="text-lg font-semibold text-[--text] mb-4">Login Mode</h3>
 
-            {/* Env override banner */}
             {loginModeOverride && (
               <div
                 className="mb-4 p-3 rounded-sm text-sm"
@@ -240,7 +465,6 @@ export default function Settings() {
               <span className="text-xs text-[--text-muted]">Saving...</span>
             )}
 
-            {/* Maintenance message editor */}
             {loginMode === 'maintenance' && (
               <div className="mt-4 pt-4 border-t border-[--border]">
                 <label className="field-label mb-2 block">Maintenance Message</label>
@@ -272,7 +496,7 @@ export default function Settings() {
           </div>
         )}
 
-        {/* Profile */}
+        {/* ── Profile ──────────────────────────────────────────── */}
         <div className="surface p-6">
           <h3 className="text-lg font-semibold text-[--text] mb-4">Profile</h3>
           <form onSubmit={handleSaveProfile}>
@@ -294,14 +518,22 @@ export default function Settings() {
             <div className="field mb-4">
               <label className="field-label">Role</label>
               <span className="badge badge-blue">{user?.role}</span>
+              {user?.organizationName && (
+                <span className="badge badge-green ml-2">{user.organizationName}</span>
+              )}
             </div>
+            {!user?.organizationId && user?.role === 'super_admin' && (
+              <p className="text-xs text-[--text-muted] mb-4">
+                As a Super Admin, you have access to all organizations.
+              </p>
+            )}
             <button type="submit" className="primary-button" disabled={saving}>
               {saving ? 'Saving...' : 'Save Changes'}
             </button>
           </form>
         </div>
 
-        {/* Change password */}
+        {/* ── Change Password ──────────────────────────────────── */}
         <div className="surface p-6">
           <h3 className="text-lg font-semibold text-[--text] mb-4">Change Password</h3>
           <form onSubmit={handleChangePassword}>

@@ -5,6 +5,7 @@ interface CreateApprovalGroupParams {
   description: string;
   memberIds: string[];
   createdBy: string;
+  organizationId: string;
 }
 
 interface UpdateApprovalGroupParams {
@@ -19,6 +20,7 @@ function formatGroup(row: Record<string, unknown>) {
     name: row.name as string,
     description: row.description as string,
     createdBy: row.created_by as string,
+    organizationId: (row.organization_id as string) || null,
     createdAt: row.created_at as string,
     updatedAt: row.updated_at as string,
   };
@@ -62,10 +64,18 @@ async function attachMembers(
   });
 }
 
-export async function listApprovalGroups() {
-  const result = await client.execute(
-    'SELECT * FROM approval_groups ORDER BY created_at DESC',
-  );
+export async function listApprovalGroups(orgId: string | null) {
+  let result;
+  if (orgId) {
+    result = await client.execute({
+      sql: 'SELECT * FROM approval_groups WHERE organization_id = ? ORDER BY created_at DESC',
+      args: [orgId],
+    });
+  } else {
+    result = await client.execute(
+      'SELECT * FROM approval_groups ORDER BY created_at DESC',
+    );
+  }
 
   return attachMembers(result.rows as Array<Record<string, unknown>>);
 }
@@ -84,16 +94,15 @@ export async function getApprovalGroupById(groupId: string) {
 
 export async function createApprovalGroup(params: CreateApprovalGroupParams) {
   const result = await client.execute({
-    sql: `INSERT INTO approval_groups (name, description, created_by)
-          VALUES (?, ?, ?)
+    sql: `INSERT INTO approval_groups (name, description, created_by, organization_id)
+          VALUES (?, ?, ?, ?)
           RETURNING *`,
-    args: [params.name, params.description || '', params.createdBy],
+    args: [params.name, params.description || '', params.createdBy, params.organizationId],
   });
 
   const group = result.rows[0] as Record<string, unknown>;
   const groupId = group.id as string;
 
-  // Add members
   for (const userId of params.memberIds) {
     await client.execute({
       sql: `INSERT OR IGNORE INTO approval_group_members (group_id, user_id)
@@ -109,7 +118,6 @@ export async function updateApprovalGroup(
   groupId: string,
   params: UpdateApprovalGroupParams,
 ) {
-  // Update group fields
   if (params.name !== undefined || params.description !== undefined) {
     const sets: string[] = [];
     const args: string[] = [];
@@ -134,15 +142,12 @@ export async function updateApprovalGroup(
     }
   }
 
-  // Update members if provided
   if (params.memberIds) {
-    // Remove existing members
     await client.execute({
       sql: 'DELETE FROM approval_group_members WHERE group_id = ?',
       args: [groupId],
     });
 
-    // Add new members
     for (const userId of params.memberIds) {
       await client.execute({
         sql: `INSERT OR IGNORE INTO approval_group_members (group_id, user_id)
@@ -156,7 +161,6 @@ export async function updateApprovalGroup(
 }
 
 export async function deleteApprovalGroup(groupId: string) {
-  // Check if group is assigned to any workflow slots
   const slotsCheck = await client.execute({
     sql: `SELECT was.id, w.name AS workflow_name
           FROM workflow_approval_slots was
@@ -174,7 +178,6 @@ export async function deleteApprovalGroup(groupId: string) {
     );
   }
 
-  // Delete members (cascade), then group
   await client.execute({
     sql: 'DELETE FROM approval_groups WHERE id = ?',
     args: [groupId],

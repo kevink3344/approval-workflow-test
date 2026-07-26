@@ -4,6 +4,14 @@ import client from './database';
 async function seedTestUsers() {
   console.log('Seeding test users...');
 
+  // Get the default organization
+  const defaultOrg = await client.execute("SELECT id FROM organizations WHERE slug = 'default' LIMIT 1");
+  if (defaultOrg.rows.length === 0) {
+    console.log('No default organization found — run seed.ts first.');
+    return;
+  }
+  const defaultOrgId = defaultOrg.rows[0].id as string;
+
   const users = [
     { email: 'alice@workflow.local', name: 'Alice Johnson', password: 'test123456', role: 'user' },
     { email: 'bob@workflow.local', name: 'Bob Smith', password: 'test123456', role: 'approver' },
@@ -23,11 +31,11 @@ async function seedTestUsers() {
 
     const passwordHash = await bcrypt.hash(user.password, 12);
     await client.execute({
-      sql: `INSERT INTO users (email, name, password_hash, role)
-            VALUES (?, ?, ?, ?)`,
-      args: [user.email, user.name, passwordHash, user.role],
+      sql: `INSERT INTO users (email, name, password_hash, role, organization_id)
+            VALUES (?, ?, ?, ?, ?)`,
+      args: [user.email, user.name, passwordHash, user.role, defaultOrgId],
     });
-    console.log(`Created user: ${user.email} (${user.role})`);
+    console.log(`Created user: ${user.email} (${user.role}) in Default Organization`);
   }
 
   console.log('Test users seed complete.');

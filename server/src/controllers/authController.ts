@@ -1,10 +1,20 @@
 import { Request, Response, NextFunction } from 'express';
 import * as authService from '../services/authService';
+import client from '../config/database';
+
+async function getDefaultOrgId(): Promise<string | null> {
+  const result = await client.execute("SELECT id FROM organizations WHERE slug = 'default' LIMIT 1");
+  if (result.rows.length === 0) return null;
+  return result.rows[0].id as string;
+}
 
 export async function register(req: Request, res: Response, next: NextFunction) {
   try {
-    const { name, email, password } = req.body;
-    const result = await authService.registerUser(name, email, password);
+    const { name, email, password, organizationId } = req.body;
+
+    // If no organizationId provided, try to assign to default org
+    const targetOrgId = organizationId || await getDefaultOrgId();
+    const result = await authService.registerUser(name, email, password, targetOrgId || undefined);
     res.status(201).json(result);
   } catch (err) {
     next(err);

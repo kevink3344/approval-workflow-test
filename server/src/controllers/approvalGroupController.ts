@@ -3,7 +3,8 @@ import * as approvalGroupService from '../services/approvalGroupService';
 
 export async function list(req: Request, res: Response, next: NextFunction) {
   try {
-    const groups = await approvalGroupService.listApprovalGroups();
+    const orgId = req.scopedOrganizationId ?? null;
+    const groups = await approvalGroupService.listApprovalGroups(orgId);
     res.json(groups);
   } catch (err) {
     next(err);
@@ -26,11 +27,17 @@ export async function getById(req: Request, res: Response, next: NextFunction) {
 export async function create(req: Request, res: Response, next: NextFunction) {
   try {
     const { name, description, memberIds } = req.body;
+    const organizationId = req.scopedOrganizationId;
+    if (!organizationId) {
+      res.status(400).json({ message: 'Organization context required to create an approval group.' });
+      return;
+    }
     const group = await approvalGroupService.createApprovalGroup({
       name,
       description,
       memberIds,
       createdBy: req.user!.userId,
+      organizationId,
     });
     res.status(201).json(group);
   } catch (err) {

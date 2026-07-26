@@ -3,9 +3,11 @@ import * as approvalService from '../services/approvalService';
 
 export async function list(req: Request, res: Response, next: NextFunction) {
   try {
+    const orgId = req.scopedOrganizationId ?? null;
     const approvals = await approvalService.listApprovals(
       req.user!.userId,
       req.user!.role,
+      orgId,
     );
     res.json(approvals);
   } catch (err) {

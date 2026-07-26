@@ -9,7 +9,9 @@ import uploadRoutes from './routes/uploads';
 import adminRoutes from './routes/admin';
 import settingsRoutes from './routes/settings';
 import infoRoutes from './routes/info';
+import organizationRoutes from './routes/organizations';
 import { errorHandler } from './middleware/errorHandler';
+import { orgScope } from './middleware/auth';
 import swaggerUi from 'swagger-ui-express';
 import { swaggerSpec } from './config/swagger';
 
@@ -22,13 +24,18 @@ app.use(express.json());
 // Routes
 app.use('/api/auth', authRoutes);
 app.use('/api/users', userRoutes);
-app.use('/api/workflows', workflowRoutes);
-app.use('/api/approvals', approvalRoutes);
-app.use('/api/approval-groups', approvalGroupRoutes);
-app.use('/api/uploads', uploadRoutes);
-app.use('/api/admin', adminRoutes);
-app.use('/api/settings', settingsRoutes);
+
+// Organization-scoped routes (middleware enforces data isolation)
+app.use('/api/workflows', orgScope, workflowRoutes);
+app.use('/api/approvals', orgScope, approvalRoutes);
+app.use('/api/approval-groups', orgScope, approvalGroupRoutes);
+app.use('/api/uploads', orgScope, uploadRoutes);
+app.use('/api/admin', orgScope, adminRoutes);
+app.use('/api/settings', orgScope, settingsRoutes);
 app.use('/api/info', infoRoutes);
+
+// Organization management routes
+app.use('/api/organizations', organizationRoutes);
 
 // ── Swagger UI ──────────────────────────────────────────────
 app.use(

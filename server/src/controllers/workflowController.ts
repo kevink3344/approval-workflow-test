@@ -3,7 +3,8 @@ import * as workflowService from '../services/workflowService';
 
 export async function list(req: Request, res: Response, next: NextFunction) {
   try {
-    const workflows = await workflowService.listWorkflows(req.user!.role, req.user!.userId);
+    const orgId = req.scopedOrganizationId ?? null;
+    const workflows = await workflowService.listWorkflows(orgId, req.user!.role, req.user!.userId);
     res.json(workflows);
   } catch (err) {
     next(err);
@@ -26,10 +27,16 @@ export async function getById(req: Request, res: Response, next: NextFunction) {
 export async function create(req: Request, res: Response, next: NextFunction) {
   try {
     const { name, description, slots, columns } = req.body;
+    const organizationId = req.scopedOrganizationId;
+    if (!organizationId) {
+      res.status(400).json({ message: 'Organization context required to create a workflow.' });
+      return;
+    }
     const workflow = await workflowService.createWorkflow({
       name,
       description,
       createdBy: req.user!.userId,
+      organizationId,
       slots,
       columns,
     });

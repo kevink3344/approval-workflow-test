@@ -1,4 +1,4 @@
-export type UserRole = 'user' | 'approver' | 'admin';
+export type UserRole = 'user' | 'approver' | 'admin' | 'super_admin';
 
 export type ApprovalRequestStatus =
   | 'pending'
@@ -19,12 +19,25 @@ export type ResolutionMode = 'first' | 'all';
 
 export type ColumnType = 'text' | 'long_text' | 'single_choice' | 'multiple_choice' | 'date' | 'file';
 
+export interface Organization {
+  id: string;
+  name: string;
+  slug: string;
+  logoUrl: string | null;
+  isActive: boolean;
+  createdAt: Date;
+  updatedAt: Date;
+  userCount?: number;
+}
+
 export interface User {
   id: string;
   email: string;
   name: string;
   passwordHash: string;
   role: UserRole;
+  organizationId: string | null;
+  organizationName?: string | null;
   createdAt: Date;
 }
 
@@ -55,6 +68,7 @@ export interface Workflow {
   description: string;
   createdBy: string;
   status: WorkflowStatus;
+  organizationId?: string | null;
   createdAt: Date;
   updatedAt: Date;
   slots?: WorkflowApprovalSlot[]; // populated on read (replaces steps)
@@ -96,6 +110,7 @@ export interface ApprovalRequest {
   workflowId: string;
   requesterId: string;
   status: ApprovalRequestStatus;
+  organizationId?: string | null;
   createdAt: Date;
   updatedAt: Date;
   fields?: ApprovalRequestField[]; // populated on read
@@ -132,4 +147,5 @@ export interface JwtPayload {
   userId: string;
   email: string;
   role: UserRole;
+  organizationId: string | null;
 }

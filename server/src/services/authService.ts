@@ -9,6 +9,7 @@ function generateToken(user: User): string {
     userId: user.id,
     email: user.email,
     role: user.role,
+    organizationId: user.organizationId,
   };
   return jwt.sign(payload, env.JWT_SECRET, {
     expiresIn: env.JWT_EXPIRES_IN,
@@ -19,6 +20,7 @@ export async function registerUser(
   name: string,
   email: string,
   password: string,
+  organizationId?: string,
 ): Promise<{ user: Omit<User, 'passwordHash'>; token: string }> {
   const existing = await client.execute({
     sql: 'SELECT id FROM users WHERE email = ?',
@@ -30,10 +32,10 @@ export async function registerUser(
 
   const passwordHash = await bcrypt.hash(password, 12);
   const result = await client.execute({
-    sql: `INSERT INTO users (email, name, password_hash, role)
-          VALUES (?, ?, ?, 'user')
-          RETURNING id, email, name, role, created_at`,
-    args: [email.toLowerCase().trim(), name.trim(), passwordHash],
+    sql: `INSERT INTO users (email, name, password_hash, role, organization_id)
+          VALUES (?, ?, ?, 'user', ?)
+          RETURNING id, email, name, role, organization_id, created_at`,
+    args: [email.toLowerCase().trim(), name.trim(), passwordHash, organizationId || null],
   });
 
   const row = result.rows[0];
@@ -42,6 +44,7 @@ export async function registerUser(
     email: row.email as string,
     name: row.name as string,
     role: row.role as User['role'],
+    organizationId: (row.organization_id as string) || null,
     createdAt: new Date(row.created_at as string),
   };
 
@@ -52,7 +55,11 @@ export async function loginUserById(
   userId: string,
 ): Promise<{ user: Omit<User, 'passwordHash'>; token: string }> {
   const result = await client.execute({
-    sql: 'SELECT id, email, name, role, created_at FROM users WHERE id = ?',
+    sql: `SELECT u.id, u.email, u.name, u.role, u.organization_id, u.created_at,
+                 o.name AS organization_name
+          FROM users u
+          LEFT JOIN organizations o ON o.id = u.organization_id
+          WHERE u.id = ?`,
     args: [userId],
   });
 
@@ -66,15 +73,17 @@ export async function loginUserById(
     email: row.email as string,
     name: row.name as string,
     role: row.role as User['role'],
+    organizationId: (row.organization_id as string) || null,
+    organizationName: (row.organization_name as string) || null,
     createdAt: new Date(row.created_at as string),
   };
 
   return { user: formatted, token: generateToken(formatted as User) };
 }
 
-export async function listUsers(): Promise<Array<{ id: string; name: string; email: string; role: string }>> {
+export async function listUsers(): Promise<Array<{ id: string; name: string; email: string; role: string; organizationId: string | null }>> {
   const result = await client.execute({
-    sql: 'SELECT id, name, email, role FROM users ORDER BY name ASC',
+    sql: 'SELECT id, name, email, role, organization_id FROM users ORDER BY name ASC',
     args: [],
   });
 
@@ -83,6 +92,7 @@ export async function listUsers(): Promise<Array<{ id: string; name: string; ema
     name: row.name as string,
     email: row.email as string,
     role: row.role as string,
+    organizationId: (row.organization_id as string) || null,
   }));
 }
 
@@ -91,7 +101,11 @@ export async function loginUser(
   password: string,
 ): Promise<{ user: Omit<User, 'passwordHash'>; token: string }> {
   const result = await client.execute({
-    sql: 'SELECT id, email, name, password_hash, role, created_at FROM users WHERE email = ?',
+    sql: `SELECT u.id, u.email, u.name, u.password_hash, u.role, u.organization_id, u.created_at,
+                 o.name AS organization_name
+          FROM users u
+          LEFT JOIN organizations o ON o.id = u.organization_id
+          WHERE u.email = ?`,
     args: [email.toLowerCase().trim()],
   });
 
@@ -110,6 +124,8 @@ export async function loginUser(
     email: row.email as string,
     name: row.name as string,
     role: row.role as User['role'],
+    organizationId: (row.organization_id as string) || null,
+    organizationName: (row.organization_name as string) || null,
     createdAt: new Date(row.created_at as string),
   };
 
@@ -118,7 +134,11 @@ export async function loginUser(
 
 export async function getUserById(userId: string): Promise<Omit<User, 'passwordHash'> | null> {
   const result = await client.execute({
-    sql: 'SELECT id, email, name, role, created_at FROM users WHERE id = ?',
+    sql: `SELECT u.id, u.email, u.name, u.role, u.organization_id, u.created_at,
+                 o.name AS organization_name
+          FROM users u
+          LEFT JOIN organizations o ON o.id = u.organization_id
+          WHERE u.id = ?`,
     args: [userId],
   });
 
@@ -130,6 +150,8 @@ export async function getUserById(userId: string): Promise<Omit<User, 'passwordH
     email: row.email as string,
     name: row.name as string,
     role: row.role as User['role'],
+    organizationId: (row.organization_id as string) || null,
+    organizationName: (row.organization_name as string) || null,
     createdAt: new Date(row.created_at as string),
   };
 }

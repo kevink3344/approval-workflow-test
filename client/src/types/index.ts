@@ -11,21 +11,36 @@ export interface InfoResponse {
   loginModeOverride: LoginMode | null;
 }
 
+// ---- Organizations ---- //
+export interface Organization {
+  id: string;
+  name: string;
+  slug: string;
+  logoUrl: string | null;
+  isActive: boolean;
+  createdAt: string;
+  updatedAt: string;
+  userCount?: number;
+}
+
+// ---- User & Auth ---- //
+export type UserRole = 'user' | 'approver' | 'admin' | 'super_admin';
+
 export interface UserListItem {
   id: string;
   name: string;
   email: string;
   role: string;
+  organizationId?: string | null;
 }
-
-// ---- User & Auth ---- //
-export type UserRole = 'user' | 'approver' | 'admin';
 
 export interface User {
   id: string;
   email: string;
   name: string;
   role: UserRole;
+  organizationId?: string | null;
+  organizationName?: string | null;
   createdAt: string;
 }
 
@@ -51,36 +66,41 @@ export interface ApprovalGroup {
   name: string;
   description: string;
   createdBy: string;
-  members: UserListItem[];
   createdAt: string;
   updatedAt: string;
-}
-
-export interface ApprovalSlotGroup {
-  id: string;
-  name: string;
-  description: string;
-  memberCount: number;
-}
-
-export interface ApprovalSlotConfig {
-  id?: string;
-  workflowId?: string;
-  groupId: string;
-  resolutionMode: 'first' | 'all';
-  slotOrder?: number;
-  createdAt?: string;
-  group?: ApprovalSlotGroup;
+  members?: { id: string; email: string; name: string; role: string }[];
+  organizationId?: string | null;
 }
 
 // ---- Workflows ---- //
 export type WorkflowStatus = 'active' | 'archived';
+export type ResolutionMode = 'first' | 'all';
+export type ColumnType = 'text' | 'long_text' | 'single_choice' | 'multiple_choice' | 'date' | 'file';
 
-export interface WorkflowStepConfig {
+export interface WorkflowColumn {
   id: string;
-  order: number;
-  approverId: string;
-  approverName?: string;
+  workflowId: string;
+  label: string;
+  columnType: ColumnType;
+  isRequired: boolean;
+  sortOrder: number;
+  options: string[] | null;
+  createdAt: string;
+}
+
+export interface WorkflowApprovalSlot {
+  id: string;
+  workflowId: string;
+  groupId: string;
+  slotOrder: number;
+  resolutionMode: ResolutionMode;
+  createdAt: string;
+  group?: {
+    id: string;
+    name: string;
+    description: string;
+    memberCount: number;
+  };
 }
 
 export interface Workflow {
@@ -88,50 +108,33 @@ export interface Workflow {
   name: string;
   description: string;
   createdBy: string;
-  steps: WorkflowStepConfig[];
-  slots: ApprovalSlotConfig[];
-  columns: WorkflowColumn[];
   status: WorkflowStatus;
+  steps?: { id: string; order: number; approverId: string }[];
+  slots?: WorkflowApprovalSlot[];
+  columns?: WorkflowColumn[];
+  organizationId?: string | null;
   createdAt: string;
   updatedAt: string;
 }
 
-// ---- Approvals ---- //
-export type ApprovalRequestStatus =
-  | 'pending'
-  | 'in_review'
-  | 'approved'
-  | 'rejected'
-  | 'cancelled';
+// ---- Approval Requests ---- //
+export type ApprovalStatus = 'pending' | 'in_review' | 'approved' | 'rejected' | 'cancelled';
 
-export type ApprovalStepStatus =
-  | 'pending'
-  | 'approved'
-  | 'rejected'
-  | 'skipped';
+export const statusLabel: Record<ApprovalStatus, string> = {
+  pending: 'Pending',
+  in_review: 'In Review',
+  approved: 'Approved',
+  rejected: 'Rejected',
+  cancelled: 'Cancelled',
+};
 
-export type ResolutionMode = 'first' | 'all';
-
-export type ColumnType = 'text' | 'long_text' | 'single_choice' | 'multiple_choice' | 'date' | 'file';
-
-export interface WorkflowColumn {
-  id: string;
-  label: string;
-  columnType: ColumnType;
-  isRequired: boolean;
-  sortOrder: number;
-  options: string[] | null;
-  createdAt?: string;
-}
-
-export interface ApprovalRequestField {
-  id: string;
-  requestId: string;
-  columnId: string;
-  label: string;
-  columnType: ColumnType;
-  value: string | null;
-}
+export const statusBadgeVariant: Record<ApprovalStatus, 'blue' | 'green' | 'red' | 'amber' | 'orange' | 'slate'> = {
+  pending: 'amber',
+  in_review: 'blue',
+  approved: 'green',
+  rejected: 'red',
+  cancelled: 'slate',
+};
 
 export interface ApprovalStep {
   id: string;
@@ -143,9 +146,18 @@ export interface ApprovalStep {
   approverName?: string;
   resolutionMode: ResolutionMode;
   stepOrder: number;
-  status: ApprovalStepStatus;
+  status: string;
   comment?: string;
   actedAt?: string;
+}
+
+export interface ApprovalRequestField {
+  id: string;
+  requestId: string;
+  columnId: string;
+  label: string;
+  columnType: ColumnType;
+  value: string | null;
 }
 
 export interface ApprovalRequest {
@@ -153,57 +165,11 @@ export interface ApprovalRequest {
   workflowId: string;
   workflowName: string;
   requesterId: string;
-  requesterName: string;
-  status: ApprovalRequestStatus;
-  steps: ApprovalStep[];
-  fields: ApprovalRequestField[];
+  requesterName?: string;
+  status: ApprovalStatus;
+  steps?: ApprovalStep[];
+  fields?: ApprovalRequestField[];
+  organizationId?: string | null;
   createdAt: string;
   updatedAt: string;
 }
-
-export interface SubmitApprovalPayload {
-  workflowId: string;
-  fields: { columnId: string; value: string | null }[];
-}
-
-export interface StepActionPayload {
-  action: 'approved' | 'rejected';
-  comment?: string;
-}
-
-// ---- Status badge helpers ---- //
-export const statusBadgeVariant: Record<
-  ApprovalRequestStatus,
-  'blue' | 'amber' | 'green' | 'red' | 'slate'
-> = {
-  pending: 'amber',
-  in_review: 'blue',
-  approved: 'green',
-  rejected: 'red',
-  cancelled: 'slate',
-};
-
-export const stepBadgeVariant: Record<
-  ApprovalStepStatus,
-  'blue' | 'amber' | 'green' | 'red' | 'slate'
-> = {
-  pending: 'amber',
-  approved: 'green',
-  rejected: 'red',
-  skipped: 'slate',
-};
-
-export const statusLabel: Record<ApprovalRequestStatus, string> = {
-  pending: 'Pending',
-  in_review: 'In Review',
-  approved: 'Approved',
-  rejected: 'Rejected',
-  cancelled: 'Cancelled',
-};
-
-export const stepStatusLabel: Record<ApprovalStepStatus, string> = {
-  pending: 'Pending',
-  approved: 'Approved',
-  rejected: 'Rejected',
-  skipped: 'Skipped',
-};

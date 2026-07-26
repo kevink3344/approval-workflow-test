@@ -98,10 +98,11 @@ async function attachFieldsAndRequester(rows: Array<Record<string, unknown>>) {
   });
 }
 
-export async function listApprovals(userId: string, userRole: string) {
+export async function listApprovals(userId: string, userRole: string, orgId: string | null) {
   let result;
 
-  if (userRole === 'admin') {
+  if (userRole === 'super_admin' && !orgId) {
+    // Super admin sees all
     result = await client.execute(
       `SELECT ar.*, w.name AS workflow_name, u.name AS requester_name
        FROM approval_requests ar
@@ -109,7 +110,32 @@ export async function listApprovals(userId: string, userRole: string) {
        LEFT JOIN users u ON u.id = ar.requester_id
        ORDER BY ar.created_at DESC`,
     );
+  } else if (orgId) {
+    // Scoped to organization (admin within org or super_admin viewing specific org)
+    if (userRole === 'admin' || userRole === 'super_admin') {
+      result = await client.execute({
+        sql: `SELECT ar.*, w.name AS workflow_name, u.name AS requester_name
+             FROM approval_requests ar
+             JOIN workflows w ON w.id = ar.workflow_id
+             LEFT JOIN users u ON u.id = ar.requester_id
+             WHERE ar.organization_id = ?
+             ORDER BY ar.created_at DESC`,
+        args: [orgId],
+      });
+    } else {
+      result = await client.execute({
+        sql: `SELECT DISTINCT ar.*, w.name AS workflow_name, u.name AS requester_name
+              FROM approval_requests ar
+              JOIN workflows w ON w.id = ar.workflow_id
+              LEFT JOIN users u ON u.id = ar.requester_id
+              LEFT JOIN approval_steps ast ON ast.request_id = ar.id
+              WHERE ar.organization_id = ? AND (ar.requester_id = ? OR ast.approver_id = ?)
+              ORDER BY ar.created_at DESC`,
+        args: [orgId, userId, userId],
+      });
+    }
   } else {
+    // Fallback (shouldn't normally happen for non-super_admin users)
     result = await client.execute({
       sql: `SELECT DISTINCT ar.*, w.name AS workflow_name, u.name AS requester_name
             FROM approval_requests ar
@@ -219,12 +245,21 @@ export async function submitApproval(params: SubmitApprovalParams) {
       throw new Error('Cannot submit request: workflow has no approval steps or slots.');
     }
 
+    // Get workflow org_id for legacy path
+    const wfLegacyResult = await client.execute({
+      sql: 'SELECT organization_id FROM workflows WHERE id = ?',
+      args: [params.workflowId],
+    });
+    const wfLegacyOrgId: string | null = wfLegacyResult.rows.length > 0
+      ? ((wfLegacyResult.rows[0] as Record<string, unknown>).organization_id as string) || null
+      : null;
+
     // Legacy path: create request and steps
     const reqResult = await client.execute({
-      sql: `INSERT INTO approval_requests (workflow_id, requester_id, status)
-            VALUES (?, ?, 'pending')
+      sql: `INSERT INTO approval_requests (workflow_id, requester_id, status, organization_id)
+            VALUES (?, ?, 'pending', ?)
             RETURNING *`,
-      args: [params.workflowId, params.requesterId],
+      args: [params.workflowId, params.requesterId, wfLegacyOrgId],
     });
 
     const request = reqResult.rows[0] as Record<string, unknown>;
@@ -274,13 +309,22 @@ export async function submitApproval(params: SubmitApprovalParams) {
     );
   }
 
-  // Create the request
-  const reqResult = await client.execute({
-    sql: `INSERT INTO approval_requests (workflow_id, requester_id, status)
-          VALUES (?, ?, 'pending')
-          RETURNING *`,
-    args: [params.workflowId, params.requesterId],
-  });
+    // Get workflow org_id
+    const wfResult = await client.execute({
+      sql: 'SELECT organization_id FROM workflows WHERE id = ?',
+      args: [params.workflowId],
+    });
+    const wfOrgId: string | null = wfResult.rows.length > 0
+      ? ((wfResult.rows[0] as Record<string, unknown>).organization_id as string) || null
+      : null;
+
+    // Create the request
+    const reqResult = await client.execute({
+      sql: `INSERT INTO approval_requests (workflow_id, requester_id, status, organization_id)
+            VALUES (?, ?, 'pending', ?)
+            RETURNING *`,
+      args: [params.workflowId, params.requesterId, wfOrgId],
+    });
 
   const request = reqResult.rows[0] as Record<string, unknown>;
   const requestId = request.id as string;

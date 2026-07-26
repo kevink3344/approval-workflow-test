@@ -12,6 +12,7 @@ interface CreateWorkflowParams {
   name: string;
   description: string;
   createdBy: string;
+  organizationId: string;
   slots?: { groupId: string; resolutionMode: string }[];
   columns?: ColumnInput[];
 }
@@ -20,7 +21,7 @@ interface UpdateWorkflowParams {
   name?: string;
   description?: string;
   slots?: { groupId: string; resolutionMode: string }[];
-  steps?: { approverId: string; order: number }[]; // kept for backward compat
+  steps?: { approverId: string; order: number }[];
   columns?: ColumnInput[];
 }
 
@@ -50,6 +51,56 @@ function validateColumn(column: ColumnInput, index: number): string | null {
     }
   }
   return null;
+}
+
+function normalizeColumnOptions(
+  columnType: string,
+  options: string[] | null | undefined,
+): string[] | null {
+  if (columnType === 'single_choice' || columnType === 'multiple_choice') {
+    return (options || []).map((opt) => opt.trim());
+  }
+  return null;
+}
+
+function columnsMatchExisting(
+  existing: Array<Record<string, unknown>>,
+  incoming: ColumnInput[],
+): boolean {
+  if (existing.length !== incoming.length) return false;
+
+  for (let i = 0; i < existing.length; i++) {
+    const oldCol = existing[i];
+    const newCol = incoming[i];
+
+    const oldLabel = String(oldCol.label || '').trim();
+    const oldType = String(oldCol.column_type || '');
+    const oldRequiredRaw = oldCol.is_required;
+    const oldRequired =
+      oldRequiredRaw === true ||
+      oldRequiredRaw === 1 ||
+      oldRequiredRaw === '1';
+    const oldSortOrder = Number(oldCol.sort_order || 0);
+    const oldOptionsRaw = oldCol.options as string | null;
+    const oldOptions = normalizeColumnOptions(
+      oldType,
+      oldOptionsRaw ? (JSON.parse(oldOptionsRaw) as string[]) : null,
+    );
+
+    const newOptions = normalizeColumnOptions(newCol.columnType, newCol.options);
+
+    if (
+      oldLabel !== newCol.label.trim() ||
+      oldType !== newCol.columnType ||
+      oldRequired !== !!newCol.isRequired ||
+      oldSortOrder !== newCol.sortOrder ||
+      JSON.stringify(oldOptions) !== JSON.stringify(newOptions)
+    ) {
+      return false;
+    }
+  }
+
+  return true;
 }
 
 async function attachColumns(wfRows: Array<Record<string, unknown>>) {
@@ -83,38 +134,6 @@ async function attachColumns(wfRows: Array<Record<string, unknown>>) {
   }
 
   return colsMap;
-}
-
-async function attachSteps(workflowRows: Array<Record<string, unknown>>) {
-  if (workflowRows.length === 0) return [];
-
-  const ids = workflowRows.map((r) => r.id as string);
-  const placeholders = ids.map(() => '?').join(', ');
-
-  const stepsResult = await client.execute({
-    sql: `SELECT id, workflow_id, step_order, approver_id
-          FROM workflow_steps
-          WHERE workflow_id IN (${placeholders})
-          ORDER BY workflow_id, step_order`,
-    args: ids,
-  });
-
-  const stepsMap = new Map<string, Array<Record<string, unknown>>>();
-  for (const s of stepsResult.rows) {
-    const wfId = s.workflow_id as string;
-    if (!stepsMap.has(wfId)) stepsMap.set(wfId, []);
-    stepsMap.get(wfId)!.push(s);
-  }
-
-  return workflowRows.map((row) => {
-    const wfId = row.id as string;
-    const steps = (stepsMap.get(wfId) || []).map((s) => ({
-      id: s.id,
-      order: s.step_order,
-      approverId: s.approver_id,
-    }));
-    return formatWorkflow(row, steps);
-  });
 }
 
 async function attachSlots(wfRows: Array<Record<string, unknown>>) {
@@ -174,7 +193,7 @@ async function attachSlots(wfRows: Array<Record<string, unknown>>) {
 
   return wfRows.map((row) => {
     const wfId = row.id as string;
-    const workflow = formatWorkflow(row, []);
+    const workflow = formatWorkflow(row);
     const slots = slotsMap.get(wfId) || [];
     return {
       ...workflow,
@@ -184,10 +203,22 @@ async function attachSlots(wfRows: Array<Record<string, unknown>>) {
   });
 }
 
-export async function listWorkflows(_userRole: string, _userId: string) {
-  const result = await client.execute(
-    'SELECT * FROM workflows ORDER BY created_at DESC',
-  );
+export async function listWorkflows(
+  orgId: string | null,
+  _userRole: string,
+  _userId: string,
+) {
+  let result;
+  if (orgId) {
+    result = await client.execute({
+      sql: 'SELECT * FROM workflows WHERE organization_id = ? ORDER BY created_at DESC',
+      args: [orgId],
+    });
+  } else {
+    result = await client.execute(
+      'SELECT * FROM workflows ORDER BY created_at DESC',
+    );
+  }
 
   const wfRows = result.rows as Array<Record<string, unknown>>;
   const withSlots = await attachSlots(wfRows);
@@ -216,7 +247,6 @@ export async function getWorkflowById(workflowId: string) {
 }
 
 export async function createWorkflow(params: CreateWorkflowParams) {
-  // Validate columns if provided
   if (params.columns) {
     const seenOrders = new Set<number>();
     for (let i = 0; i < params.columns.length; i++) {
@@ -231,16 +261,15 @@ export async function createWorkflow(params: CreateWorkflowParams) {
   }
 
   const result = await client.execute({
-    sql: `INSERT INTO workflows (name, description, created_by)
-          VALUES (?, ?, ?)
+    sql: `INSERT INTO workflows (name, description, created_by, organization_id)
+          VALUES (?, ?, ?, ?)
           RETURNING *`,
-    args: [params.name, params.description || '', params.createdBy],
+    args: [params.name, params.description || '', params.createdBy, params.organizationId],
   });
 
   const workflow = result.rows[0] as Record<string, unknown>;
   const workflowId = workflow.id as string;
 
-  // Create slots if provided
   if (params.slots && params.slots.length > 0) {
     for (let i = 0; i < params.slots.length; i++) {
       const slot = params.slots[i];
@@ -252,7 +281,6 @@ export async function createWorkflow(params: CreateWorkflowParams) {
     }
   }
 
-  // Create columns if provided
   if (params.columns && params.columns.length > 0) {
     for (const col of params.columns) {
       await client.execute({
@@ -296,7 +324,6 @@ export async function updateWorkflow(workflowId: string, params: UpdateWorkflowP
     });
   }
 
-  // Handle slots if provided
   if (params.slots !== undefined) {
     await client.execute({
       sql: 'DELETE FROM workflow_approval_slots WHERE workflow_id = ?',
@@ -313,9 +340,7 @@ export async function updateWorkflow(workflowId: string, params: UpdateWorkflowP
     }
   }
 
-  // Handle columns if provided
   if (params.columns !== undefined) {
-    // Validate
     const seenOrders = new Set<number>();
     for (let i = 0; i < params.columns.length; i++) {
       const col = params.columns[i];
@@ -327,30 +352,54 @@ export async function updateWorkflow(workflowId: string, params: UpdateWorkflowP
       seenOrders.add(col.sortOrder);
     }
 
-    // Delete existing columns (cascade will not affect approval_request_fields since we don't cascade)
-    await client.execute({
-      sql: 'DELETE FROM workflow_columns WHERE workflow_id = ?',
+    const existingColumnsResult = await client.execute({
+      sql: `SELECT label, column_type, is_required, sort_order, options
+            FROM workflow_columns
+            WHERE workflow_id = ?
+            ORDER BY sort_order`,
       args: [workflowId],
     });
 
-    // Create new columns
-    for (const col of params.columns) {
-      await client.execute({
-        sql: `INSERT INTO workflow_columns (workflow_id, label, column_type, is_required, sort_order, options)
-              VALUES (?, ?, ?, ?, ?, ?)`,
-        args: [
-          workflowId,
-          col.label.trim(),
-          col.columnType,
-          col.isRequired ? 1 : 0,
-          col.sortOrder,
-          col.options ? JSON.stringify(col.options) : null,
-        ],
+    const incomingColumns = [...params.columns].sort(
+      (a, b) => a.sortOrder - b.sortOrder,
+    );
+    const existingColumns = existingColumnsResult.rows as Array<Record<string, unknown>>;
+    const hasColumnChanges = !columnsMatchExisting(existingColumns, incomingColumns);
+
+    if (hasColumnChanges) {
+      const requestsResult = await client.execute({
+        sql: 'SELECT id FROM approval_requests WHERE workflow_id = ? LIMIT 1',
+        args: [workflowId],
       });
+
+      if (requestsResult.rows.length > 0) {
+        throw new Error('Workflow already has submitted requests. Custom fields cannot be changed.');
+      }
+    }
+
+    if (hasColumnChanges) {
+      await client.execute({
+        sql: 'DELETE FROM workflow_columns WHERE workflow_id = ?',
+        args: [workflowId],
+      });
+
+      for (const col of incomingColumns) {
+        await client.execute({
+          sql: `INSERT INTO workflow_columns (workflow_id, label, column_type, is_required, sort_order, options)
+                VALUES (?, ?, ?, ?, ?, ?)`,
+          args: [
+            workflowId,
+            col.label.trim(),
+            col.columnType,
+            col.isRequired ? 1 : 0,
+            col.sortOrder,
+            col.options ? JSON.stringify(col.options) : null,
+          ],
+        });
+      }
     }
   }
 
-  // Handle old-style steps if provided (backward compat)
   if (params.steps) {
     await client.execute({
       sql: 'DELETE FROM workflow_steps WHERE workflow_id = ?',
@@ -369,7 +418,6 @@ export async function updateWorkflow(workflowId: string, params: UpdateWorkflowP
 }
 
 export async function deleteWorkflow(workflowId: string) {
-  // Explicitly delete columns first (though CASCADE on FK handles it, being explicit)
   await client.execute({
     sql: 'DELETE FROM workflow_columns WHERE workflow_id = ?',
     args: [workflowId],
@@ -388,18 +436,15 @@ export async function deleteWorkflow(workflowId: string) {
   });
 }
 
-function formatWorkflow(row: Record<string, unknown>, steps: Array<Record<string, unknown>>) {
+function formatWorkflow(row: Record<string, unknown>) {
   return {
     id: row.id as string,
     name: row.name as string,
     description: row.description as string,
     createdBy: row.created_by as string,
     status: row.status as string,
-    steps: steps.map((s) => ({
-      id: s.id as string,
-      order: s.order as number,
-      approverId: s.approverId as string,
-    })),
+    organizationId: (row.organization_id as string) || null,
+    steps: [],
     createdAt: row.created_at as string,
     updatedAt: row.updated_at as string,
   };

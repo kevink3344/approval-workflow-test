@@ -19,6 +19,23 @@ interface ColumnDraft {
   options: string[] | null;
 }
 
+function serializeColumns(columns: ColumnDraft[]): string {
+  const normalized = [...columns]
+    .map((col) => ({
+      label: col.label.trim(),
+      columnType: col.columnType,
+      isRequired: !!col.isRequired,
+      sortOrder: col.sortOrder,
+      options:
+        col.columnType === 'single_choice' || col.columnType === 'multiple_choice'
+          ? (col.options || []).map((opt) => opt.trim())
+          : null,
+    }))
+    .sort((a, b) => a.sortOrder - b.sortOrder);
+
+  return JSON.stringify(normalized);
+}
+
 function newColumn(order: number): ColumnDraft {
   return {
     label: '',
@@ -41,6 +58,7 @@ export default function WorkflowEdit() {
   const [description, setDescription] = useState('');
   const [slots, setSlots] = useState<ApprovalSlotConfig[]>([]);
   const [columns, setColumns] = useState<ColumnDraft[]>([]);
+  const [initialColumnsSignature, setInitialColumnsSignature] = useState('');
   const [submitting, setSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState('');
   const [initialized, setInitialized] = useState(false);
@@ -63,15 +81,17 @@ export default function WorkflowEdit() {
       }
 
       if (workflow.columns && workflow.columns.length > 0) {
-        setColumns(
-          workflow.columns.map((c, i) => ({
-            label: c.label,
-            columnType: c.columnType,
-            isRequired: c.isRequired,
-            sortOrder: c.sortOrder || i + 1,
-            options: c.options,
-          })),
-        );
+        const initialColumns = workflow.columns.map((c, i) => ({
+          label: c.label,
+          columnType: c.columnType,
+          isRequired: c.isRequired,
+          sortOrder: c.sortOrder || i + 1,
+          options: c.options,
+        }));
+        setColumns(initialColumns);
+        setInitialColumnsSignature(serializeColumns(initialColumns));
+      } else {
+        setInitialColumnsSignature(serializeColumns([]));
       }
 
       setInitialized(true);
@@ -193,12 +213,22 @@ export default function WorkflowEdit() {
 
     setSubmitting(true);
     try {
-      await apiClient.patch(`/workflows/${id}`, {
+      const payload: {
+        name: string;
+        description: string;
+        slots: ApprovalSlotConfig[];
+        columns?: ColumnDraft[];
+      } = {
         name,
         description,
         slots,
-        columns,
-      });
+      };
+
+      if (serializeColumns(columns) !== initialColumnsSignature) {
+        payload.columns = columns;
+      }
+
+      await apiClient.patch(`/workflows/${id}`, payload);
       navigate(`/workflows/${id}`);
     } catch (err: unknown) {
       const axiosErr = err as {

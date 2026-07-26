@@ -51,7 +51,9 @@ export function errorHandler(
   // Conflict errors
   if (
     err.message.includes('already') ||
-    err.message.includes('has already been')
+    err.message.includes('has already been') ||
+    err.message.toLowerCase().includes('foreign key constraint failed') ||
+    err.message.toLowerCase().includes('constraint failed')
   ) {
     res.status(409).json({ message: err.message });
     return;
