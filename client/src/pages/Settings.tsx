@@ -3,7 +3,7 @@ import { Link } from 'react-router-dom';
 import { useAuth } from '../hooks/useAuth';
 import apiClient from '../api/client';
 import { getPublicSetting, updateSetting } from '../api/settings';
-import type { LoginMode, InfoResponse, Organization } from '../types';
+import type { LoginMode, InfoResponse, Organization, UserListItem } from '../types';
 
 const LOGIN_MODE_LABELS: Record<LoginMode, string> = {
   select: 'Select User (Test)',
@@ -26,6 +26,12 @@ export default function Settings() {
   const [orgError, setOrgError] = useState('');
   const [orgSuccess, setOrgSuccess] = useState('');
   const [deletingOrgId, setDeletingOrgId] = useState<string | null>(null);
+
+  // User Management state (admin only)
+  const [users, setUsers] = useState<UserListItem[]>([]);
+  const [usersLoading, setUsersLoading] = useState(false);
+  const [usersError, setUsersError] = useState('');
+  const [updatingUserId, setUpdatingUserId] = useState<string | null>(null);
 
   // Profile state
   const [name, setName] = useState(user?.name || '');
@@ -104,6 +110,27 @@ export default function Settings() {
     fetchOrgs();
   }, [isSuperAdmin, orgSuccess]);
 
+  // Fetch users for admins
+  useEffect(() => {
+    if (!isAdmin) return;
+
+    async function fetchUsers() {
+      setUsersLoading(true);
+      setUsersError('');
+      try {
+        const res = await apiClient.get<UserListItem[]>('/admin/users');
+        setUsers(res.data);
+      } catch (err: unknown) {
+        const axiosErr = err as { response?: { data?: { message?: string } } };
+        setUsersError(axiosErr.response?.data?.message || 'Failed to load users.');
+      } finally {
+        setUsersLoading(false);
+      }
+    }
+
+    fetchUsers();
+  }, [isAdmin]);
+
   const generateSlug = (name: string) => {
     return name
       .toLowerCase()
@@ -166,6 +193,21 @@ export default function Settings() {
       setOrgError(axiosErr.response?.data?.message || 'Failed to delete organization.');
     } finally {
       setDeletingOrgId(null);
+    }
+  };
+
+  const handleRoleChange = async (userId: string, newRole: string) => {
+    try {
+      setUpdatingUserId(userId);
+      await apiClient.patch(`/admin/users/${userId}/role`, { role: newRole });
+      setUsers((prev) =>
+        prev.map((u) => (u.id === userId ? { ...u, role: newRole } : u)),
+      );
+    } catch (err: unknown) {
+      const axiosErr = err as { response?: { data?: { message?: string } } };
+      setUsersError(axiosErr.response?.data?.message || 'Failed to update role.');
+    } finally {
+      setUpdatingUserId(null);
     }
   };
 
@@ -407,6 +449,81 @@ export default function Settings() {
                         </td>
                       </tr>
                     ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* ── User Management — admin only ────────────────────── */}
+        {isAdmin && (
+          <div className="surface p-6">
+            <h3 className="text-lg font-semibold text-[--text] mb-4">User Management</h3>
+
+            {usersError && (
+              <div
+                className="mb-4 p-3 rounded-sm text-sm"
+                style={{ background: '#ffe8ea', color: '#ba3040', border: '1px solid #ffb1b8' }}
+              >
+                {usersError}
+              </div>
+            )}
+
+            {usersLoading ? (
+              <p className="text-sm text-[--text-muted]">Loading users...</p>
+            ) : (
+              <div className="overflow-x-auto">
+                <table className="w-full text-sm">
+                  <thead>
+                    <tr className="border-b border-[--border] text-left text-[--text-muted]">
+                      <th className="py-2 pr-4 font-medium">Name</th>
+                      <th className="py-2 pr-4 font-medium">Email</th>
+                      <th className="py-2 pr-4 font-medium">Role</th>
+                      <th className="py-2 font-medium w-44">Actions</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {users.map((u) => (
+                      <tr key={u.id} className="border-b border-[--border]">
+                        <td className="py-2 pr-4 font-medium">{u.name}</td>
+                        <td className="py-2 pr-4 text-[--text-muted]">{u.email}</td>
+                        <td className="py-2 pr-4">
+                          <span className={`badge ${
+                            u.role === 'super_admin' ? 'badge-purple' :
+                            u.role === 'admin' ? 'badge-blue' :
+                            u.role === 'approver' ? 'badge-green' :
+                            'badge-gray'
+                          }`}>
+                            {u.role.replace('_', ' ')}
+                          </span>
+                        </td>
+                        <td className="py-2">
+                          <select
+                            value={u.role}
+                            onChange={(e) => handleRoleChange(u.id, e.target.value)}
+                            disabled={updatingUserId === u.id}
+                            className="input-control text-xs py-1 px-2"
+                          >
+                            {(isSuperAdmin
+                              ? ['user', 'approver', 'admin', 'super_admin']
+                              : ['user', 'approver', 'admin']
+                            ).map((role) => (
+                              <option key={role} value={role}>
+                                {role.replace('_', ' ')}
+                              </option>
+                            ))}
+                          </select>
+                        </td>
+                      </tr>
+                    ))}
+                    {users.length === 0 && (
+                      <tr>
+                        <td colSpan={4} className="py-4 text-center text-[--text-muted]">
+                          No users found.
+                        </td>
+                      </tr>
+                    )}
                   </tbody>
                 </table>
               </div>

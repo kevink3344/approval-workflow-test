@@ -9,6 +9,7 @@ import Workflows from './pages/Workflows';
 import WorkflowDetail from './pages/WorkflowDetail';
 import WorkflowEdit from './pages/WorkflowEdit';
 import ApprovalGroups from './pages/ApprovalGroups';
+import Admin from './pages/Admin';
 import Settings from './pages/Settings';
 
 export default function App() {
@@ -58,6 +59,14 @@ export default function App() {
           element={
             <ProtectedRoute adminOnly>
               <ApprovalGroups />
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="/admin"
+          element={
+            <ProtectedRoute adminOnly>
+              <Admin />
             </ProtectedRoute>
           }
         />
