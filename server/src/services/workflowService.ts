@@ -13,6 +13,9 @@ interface CreateWorkflowParams {
   description: string;
   createdBy: string;
   organizationId: string;
+  status?: string;
+  categoryId?: string | null;
+  instructions?: string | null;
   slots?: { groupId: string; resolutionMode: string }[];
   columns?: ColumnInput[];
 }
@@ -20,6 +23,9 @@ interface CreateWorkflowParams {
 interface UpdateWorkflowParams {
   name?: string;
   description?: string;
+  status?: string;
+  categoryId?: string | null;
+  instructions?: string | null;
   slots?: { groupId: string; resolutionMode: string }[];
   steps?: { approverId: string; order: number }[];
   columns?: ColumnInput[];
@@ -101,6 +107,29 @@ function columnsMatchExisting(
   }
 
   return true;
+}
+
+async function attachCategoryName(wfRows: Array<Record<string, unknown>>) {
+  if (wfRows.length === 0) return new Map<string, string | null>();
+
+  // Collect all non-null category_ids
+  const catIds = wfRows
+    .map((r) => (r.category_id as string) || null)
+    .filter((id): id is string => id !== null);
+  if (catIds.length === 0) return new Map<string, string | null>();
+
+  const placeholders = catIds.map(() => '?').join(', ');
+  const catResult = await client.execute({
+    sql: `SELECT id, name FROM workflow_categories WHERE id IN (${placeholders})`,
+    args: catIds,
+  });
+
+  const catMap = new Map<string, string | null>();
+  for (const r of catResult.rows) {
+    const row = r as Record<string, unknown>;
+    catMap.set(row.id as string, row.name as string);
+  }
+  return catMap;
 }
 
 async function attachColumns(wfRows: Array<Record<string, unknown>>) {
@@ -223,10 +252,11 @@ export async function listWorkflows(
   const wfRows = result.rows as Array<Record<string, unknown>>;
   const withSlots = await attachSlots(wfRows);
   const colsMap = await attachColumns(wfRows);
+  const catMap = await attachCategoryName(wfRows);
 
   return withSlots.map((wf) => {
     const cols = colsMap.get(wf.id as string) || [];
-    return { ...wf, columns: cols };
+    return { ...wf, columns: cols, categoryName: catMap.get(wf.categoryId as string) || null };
   });
 }
 
@@ -243,7 +273,15 @@ export async function getWorkflowById(workflowId: string) {
   const colsMap = await attachColumns(wfRows);
   const wf = workflows[0];
   const cols = colsMap.get(wf.id as string) || [];
-  return { ...wf, columns: cols };
+  const catName = await (async () => {
+    if (!wf.categoryId) return null;
+    const catResult = await client.execute({
+      sql: 'SELECT name FROM workflow_categories WHERE id = ?',
+      args: [wf.categoryId as string],
+    });
+    return catResult.rows.length > 0 ? (catResult.rows[0] as Record<string, unknown>).name as string : null;
+  })();
+  return { ...wf, columns: cols, categoryName: catName };
 }
 
 export async function createWorkflow(params: CreateWorkflowParams) {
@@ -261,10 +299,18 @@ export async function createWorkflow(params: CreateWorkflowParams) {
   }
 
   const result = await client.execute({
-    sql: `INSERT INTO workflows (name, description, created_by, organization_id)
-          VALUES (?, ?, ?, ?)
+    sql: `INSERT INTO workflows (name, description, created_by, organization_id, status, category_id, instructions)
+          VALUES (?, ?, ?, ?, ?, ?, ?)
           RETURNING *`,
-    args: [params.name, params.description || '', params.createdBy, params.organizationId],
+    args: [
+      params.name,
+      params.description || '',
+      params.createdBy,
+      params.organizationId,
+      params.status || 'draft',
+      params.categoryId ?? null,
+      params.instructions ?? null,
+    ],
   });
 
   const workflow = result.rows[0] as Record<string, unknown>;
@@ -302,25 +348,38 @@ export async function createWorkflow(params: CreateWorkflowParams) {
 }
 
 export async function updateWorkflow(workflowId: string, params: UpdateWorkflowParams) {
-  if (params.name !== undefined || params.description !== undefined) {
-    const sets: string[] = [];
-    const args: string[] = [];
+  // Build dynamic SET clause for scalar fields
+  const scalarSets: string[] = [];
+  const scalarArgs: string[] = [];
 
-    if (params.name !== undefined) {
-      sets.push('name = ?');
-      args.push(params.name);
-    }
-    if (params.description !== undefined) {
-      sets.push('description = ?');
-      args.push(params.description);
-    }
+  if (params.name !== undefined) {
+    scalarSets.push('name = ?');
+    scalarArgs.push(params.name);
+  }
+  if (params.description !== undefined) {
+    scalarSets.push('description = ?');
+    scalarArgs.push(params.description);
+  }
+  if (params.status !== undefined) {
+    scalarSets.push('status = ?');
+    scalarArgs.push(params.status);
+  }
+  if (params.categoryId !== undefined) {
+    scalarSets.push('category_id = ?');
+    scalarArgs.push((params.categoryId ?? null) as any);
+  }
+  if (params.instructions !== undefined) {
+    scalarSets.push('instructions = ?');
+    scalarArgs.push(params.instructions as string);
+  }
 
-    sets.push("updated_at = datetime('now')");
-    args.push(workflowId);
+  if (scalarSets.length > 0) {
+    scalarSets.push("updated_at = datetime('now')");
+    scalarArgs.push(workflowId);
 
     await client.execute({
-      sql: `UPDATE workflows SET ${sets.join(', ')} WHERE id = ?`,
-      args,
+      sql: `UPDATE workflows SET ${scalarSets.join(', ')} WHERE id = ?`,
+      args: scalarArgs,
     });
   }
 
@@ -443,6 +502,8 @@ function formatWorkflow(row: Record<string, unknown>) {
     description: row.description as string,
     createdBy: row.created_by as string,
     status: row.status as string,
+    categoryId: (row.category_id as string) || null,
+    instructions: (row.instructions as string) || null,
     organizationId: (row.organization_id as string) || null,
     steps: [],
     createdAt: row.created_at as string,

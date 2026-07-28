@@ -4,7 +4,7 @@ import { useApi } from '../hooks/useApi';
 import { useAuth } from '../hooks/useAuth';
 import LoadingSpinner from '../components/LoadingSpinner';
 import apiClient from '../api/client';
-import type { Workflow, ApprovalGroup, ApprovalSlotConfig, WorkflowColumn, ColumnType } from '../types';
+import type { Workflow, ApprovalGroup, ApprovalSlotConfig, WorkflowColumn, ColumnType, WorkflowCategory } from '../types';
 
 interface ColumnDraft {
   label: string;
@@ -29,14 +29,20 @@ export default function Workflows() {
   const navigate = useNavigate();
   const { data, loading, error, refetch } = useApi<Workflow[]>('/workflows');
   const { data: groups } = useApi<ApprovalGroup[]>('/approval-groups');
+  const { data: categories } = useApi<WorkflowCategory[]>('/categories');
+  const activeCategories = categories?.filter(c => c.isActive) ?? [];
 
   const [showCreate, setShowCreate] = useState(false);
   const [name, setName] = useState('');
   const [description, setDescription] = useState('');
+  const [status, setStatus] = useState<string>('draft');
+  const [categoryId, setCategoryId] = useState<string>('');
+  const [instructions, setInstructions] = useState('');
   const [slots, setSlots] = useState<ApprovalSlotConfig[]>([]);
   const [columns, setColumns] = useState<ColumnDraft[]>([]);
   const [submitting, setSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState('');
+  const [categoryFilter, setCategoryFilter] = useState<string>('');
 
   const addSlot = () => {
     setSlots([...slots, { groupId: '', resolutionMode: 'all' }]);
@@ -115,6 +121,9 @@ export default function Workflows() {
   const resetForm = () => {
     setName('');
     setDescription('');
+    setStatus('draft');
+    setCategoryId('');
+    setInstructions('');
     setSlots([]);
     setColumns([]);
     setShowCreate(false);
@@ -150,7 +159,15 @@ export default function Workflows() {
 
     setSubmitting(true);
     try {
-      await apiClient.post('/workflows', { name, description, slots, columns });
+      await apiClient.post('/workflows', {
+        name,
+        description,
+        status,
+        categoryId: categoryId || null,
+        instructions: instructions || null,
+        slots,
+        columns,
+      });
       resetForm();
       refetch();
     } catch (err: unknown) {
@@ -203,17 +220,59 @@ export default function Workflows() {
                 required
               />
             </div>
-            <div className="field mb-4">
-              <label className="field-label">Description</label>
-              <textarea
-                className="input-control"
-                placeholder="Describe what this workflow is for..."
-                value={description}
-                onChange={(e) => setDescription(e.target.value)}
-              />
-            </div>
+             <div className="field mb-4">
+               <label className="field-label">Description</label>
+               <textarea
+                 className="input-control"
+                 placeholder="Describe what this workflow is for..."
+                 value={description}
+                 onChange={(e) => setDescription(e.target.value)}
+               />
+             </div>
 
-            {/* Slot Builder */}
+             <div className="grid gap-4 sm:grid-cols-2 mb-4">
+               <div className="field">
+                 <label className="field-label">Status</label>
+                 <select
+                   className="input-control"
+                   value={status}
+                   onChange={(e) => setStatus(e.target.value)}
+                 >
+                   <option value="draft">Draft — Not visible to users</option>
+                   <option value="active">Active — Accepting submissions</option>
+                   <option value="archived">Archived — Read-only history</option>
+                 </select>
+               </div>
+               <div className="field">
+                 <label className="field-label">Category</label>
+                 <select
+                   className="input-control"
+                   value={categoryId}
+                   onChange={(e) => setCategoryId(e.target.value)}
+                 >
+                   <option value="">— No category —</option>
+                   {activeCategories.map((cat) => (
+                     <option key={cat.id} value={cat.id}>{cat.name}</option>
+                   ))}
+                 </select>
+               </div>
+             </div>
+
+             <div className="field mb-4">
+               <label className="field-label">Submission Instructions</label>
+               <textarea
+                 className="input-control"
+                 placeholder="Instructions shown to users when they submit a request (e.g., 'Attach all required receipts...')"
+                 value={instructions}
+                 onChange={(e) => setInstructions(e.target.value)}
+                 rows={3}
+               />
+               <p className="text-xs text-[--text-muted] mt-1">
+                 Optional. This text is displayed at the top of the submission form.
+               </p>
+             </div>
+
+             {/* Slot Builder */}
             <div className="field mb-4">
               <label className="field-label">Approval Slots</label>
               <p className="text-xs text-[--text-muted] mb-2">
@@ -484,6 +543,35 @@ export default function Workflows() {
         </div>
       )}
 
+      {/* Category filter pills */}
+      {data && data.length > 0 && activeCategories.length > 0 && (
+        <div className="flex flex-wrap gap-2 mb-4">
+          <button
+            className={`text-xs px-3 py-1 rounded-full border transition-colors ${
+              categoryFilter === ''
+                ? 'bg-accent text-white border-accent'
+                : 'bg-white text-[--text-muted] border-[--border] hover:border-accent'
+            }`}
+            onClick={() => setCategoryFilter('')}
+          >
+            All
+          </button>
+          {activeCategories.map((cat) => (
+            <button
+              key={cat.id}
+              className={`text-xs px-3 py-1 rounded-full border transition-colors ${
+                categoryFilter === cat.id
+                  ? 'bg-accent text-white border-accent'
+                  : 'bg-white text-[--text-muted] border-[--border] hover:border-accent'
+              }`}
+              onClick={() => setCategoryFilter(cat.id)}
+            >
+              {cat.name}
+            </button>
+          ))}
+        </div>
+      )}
+
       {/* Workflow list */}
       {data && data.length === 0 && (
         <div className="surface p-12 text-center">
@@ -492,32 +580,65 @@ export default function Workflows() {
       )}
 
       <div className="grid gap-4">
-        {data?.map((wf) => (
-          <div
-            key={wf.id}
-            className="surface p-5 cursor-pointer hover:shadow-md transition-shadow"
-            onClick={() => navigate(`/workflows/${wf.id}`)}
-          >
-            <div className="flex items-center justify-between">
-              <div>
-                <h4 className="font-semibold text-[--text]">{wf.name}</h4>
-                <p className="text-sm text-[--text-muted] mt-1">{wf.description}</p>
-                <p className="text-xs text-[--text-muted] mt-2">
-                  {wf.slots && wf.slots.length > 0 ? (
-                    <>{wf.slots.length} slot{wf.slots.length !== 1 ? 's' : ''}</>
-                  ) : (
-                    <>{wf.steps?.length ?? 0} step{(wf.steps?.length ?? 0) !== 1 ? 's' : ''}</>
-                  )}
-                  {wf.columns && wf.columns.length > 0 && (
-                    <> &middot; {wf.columns.length} field{wf.columns.length !== 1 ? 's' : ''}</>
-                  )}
-                  {' '}&middot; Created {new Date(wf.createdAt).toLocaleDateString()}
-                </p>
+        {data
+          ?.filter((wf) => {
+            // Non-admin users only see active workflows
+            if (!isAdmin && wf.status !== 'active') return false;
+            // Apply category filter (match on categoryId)
+            if (categoryFilter && wf.categoryId !== categoryFilter) return false;
+            return true;
+          })
+          .map((wf) => {
+            const statusColors: Record<string, string> = {
+              draft: 'badge-slate',
+              active: 'badge-green',
+              archived: 'badge-amber',
+            };
+            const statusBadge = statusColors[wf.status] || 'badge-slate';
+
+            return (
+              <div
+                key={wf.id}
+                className="surface p-5 cursor-pointer hover:shadow-md transition-shadow"
+                onClick={() => navigate(`/workflows/${wf.id}`)}
+              >
+                <div className="flex items-center justify-between">
+                  <div>
+                    <div className="flex items-center gap-2 mb-1">
+                      <h4 className="font-semibold text-[--text]">{wf.name}</h4>
+                      {wf.categoryName && (
+                        <span className="text-xs px-2 py-0.5 rounded-full bg-[--bg] text-[--text-muted] border border-[--border]">
+                          {wf.categoryName}
+                        </span>
+                      )}
+                    </div>
+                    <p className="text-sm text-[--text-muted] mt-1">{wf.description}</p>
+                    <p className="text-xs text-[--text-muted] mt-2">
+                      {wf.slots && wf.slots.length > 0 ? (
+                        <>{wf.slots.length} slot{wf.slots.length !== 1 ? 's' : ''}</>
+                      ) : (
+                        <>{wf.steps?.length ?? 0} step{(wf.steps?.length ?? 0) !== 1 ? 's' : ''}</>
+                      )}
+                      {wf.columns && wf.columns.length > 0 && (
+                        <> &middot; {wf.columns.length} field{wf.columns.length !== 1 ? 's' : ''}</>
+                      )}
+                      {' '}&middot; Created {new Date(wf.createdAt).toLocaleDateString()}
+                    </p>
+                  </div>
+                  <span className={`badge ${statusBadge}`}>{wf.status}</span>
+                </div>
               </div>
-              <span className="badge badge-slate">{wf.status}</span>
-            </div>
+            );
+          })}
+        {data?.filter((wf) => {
+          if (!isAdmin && wf.status !== 'active') return false;
+          if (categoryFilter && wf.categoryId !== categoryFilter) return false;
+          return true;
+        }).length === 0 && data && data.length > 0 && (
+          <div className="surface p-8 text-center">
+            <p className="text-sm text-[--text-muted]">No workflows match the selected filters.</p>
           </div>
-        ))}
+        )}
       </div>
     </div>
   );

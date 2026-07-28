@@ -26,7 +26,7 @@ export async function getById(req: Request, res: Response, next: NextFunction) {
 
 export async function create(req: Request, res: Response, next: NextFunction) {
   try {
-    const { name, description, slots, columns } = req.body;
+    const { name, description, status, categoryId, instructions, slots, columns } = req.body;
     const organizationId = req.scopedOrganizationId;
     if (!organizationId) {
       res.status(400).json({ message: 'Organization context required to create a workflow.' });
@@ -37,6 +37,9 @@ export async function create(req: Request, res: Response, next: NextFunction) {
       description,
       createdBy: req.user!.userId,
       organizationId,
+      status,
+      categoryId,
+      instructions,
       slots,
       columns,
     });

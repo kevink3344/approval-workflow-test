@@ -406,6 +406,46 @@
     border: none;
     border-top: 1px solid var(--border);
   }
+
+  /* ---- Collapsible Sections / Accordion ---- */
+  .collapsible-header {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 16px 20px;
+    cursor: pointer;
+    user-select: none;
+    transition: background-color 0.15s ease;
+    background: transparent;
+    border: 0;
+    color: var(--text);
+    font-family: "Work Sans", sans-serif;
+  }
+
+  .collapsible-header:hover {
+    background-color: var(--surface-hover);
+  }
+
+  .collapsible-chevron {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 20px;
+    height: 20px;
+    transition: transform 0.2s ease;
+    color: var(--text-muted);
+    font-size: 14px;
+    flex-shrink: 0;
+  }
+
+  .collapsible-chevron.expanded {
+    transform: rotate(90deg);
+  }
+
+  .collapsible-content {
+    padding: 20px;
+    border-top: 1px solid var(--border);
+  }
 }
 
 /* ---- Media Queries ---- */

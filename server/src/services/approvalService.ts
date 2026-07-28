@@ -170,6 +170,19 @@ export async function getApprovalById(approvalId: string) {
 }
 
 export async function submitApproval(params: SubmitApprovalParams) {
+  // Check workflow status — only active workflows accept submissions
+  const wfStatusResult = await client.execute({
+    sql: 'SELECT status FROM workflows WHERE id = ?',
+    args: [params.workflowId],
+  });
+  if (wfStatusResult.rows.length === 0) {
+    throw new Error('Workflow not found.');
+  }
+  const wfStatus = (wfStatusResult.rows[0] as Record<string, unknown>).status as string;
+  if (wfStatus !== 'active') {
+    throw new Error('Cannot submit to a workflow that is not active.');
+  }
+
   // Validate fields against workflow columns if fields are provided
   if (params.fields && params.fields.length > 0) {
     const columns = await client.execute({

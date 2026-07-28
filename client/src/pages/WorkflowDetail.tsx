@@ -97,6 +97,8 @@ export default function WorkflowDetail() {
     return Object.keys(errors).length === 0;
   };
 
+  const isActive = workflow?.status === 'active';
+
   const handleOpenForm = () => {
     // If no custom columns exist, submit directly without showing a form
     if (!hasColumns) {
@@ -200,22 +202,50 @@ export default function WorkflowDetail() {
         &larr; Back to Workflows
       </Link>
 
-      <div className="surface p-6 mb-6">
-        <div className="flex items-start justify-between mb-4">
-          <div>
-            <h2 className="text-xl font-semibold text-[--text]">{workflow.name}</h2>
-            <p className="text-sm text-[--text-muted] mt-2">{workflow.description}</p>
-          </div>
-          <span className="badge badge-slate">{workflow.status}</span>
-        </div>
+       <div className="surface p-6 mb-6">
+         <div className="flex items-start justify-between mb-4">
+           <div>
+             <div className="flex items-center gap-2 mb-1">
+               <h2 className="text-xl font-semibold text-[--text]">{workflow.name}</h2>
+               {workflow.categoryName && (
+                 <span className="text-xs px-2 py-0.5 rounded-full bg-[--bg] text-[--text-muted] border border-[--border]">
+                   {workflow.categoryName}
+                 </span>
+               )}
+             </div>
+             <p className="text-sm text-[--text-muted] mt-2">{workflow.description}</p>
+           </div>
+           <span className={`badge ${workflow.status === 'draft' ? 'badge-slate' : workflow.status === 'active' ? 'badge-green' : 'badge-amber'}`}>
+             {workflow.status}
+           </span>
+         </div>
 
-        <p className="text-xs text-[--text-muted]">
-          Created {new Date(workflow.createdAt).toLocaleDateString()}
-          {hasSlots && <> &middot; {workflow.slots!.length} slot{workflow.slots!.length !== 1 ? 's' : ''}</>}
-          {!hasSlots && hasSteps && <> &middot; {workflow.steps!.length} step{workflow.steps!.length !== 1 ? 's' : ''}</>}
-          {hasColumns && <> &middot; {workflow.columns!.length} field{workflow.columns!.length !== 1 ? 's' : ''}</>}
-        </p>
-      </div>
+         {workflow.status === 'draft' && (
+           <div className="mt-4 p-3 rounded-sm text-sm" style={{ background: '#fff8e6', color: '#8a6d14', border: '1px solid #ffd970' }}>
+             This workflow is in draft mode and is only visible to admins. Set it to "Active" to allow submissions.
+           </div>
+         )}
+         {workflow.status === 'archived' && (
+           <div className="mt-4 p-3 rounded-sm text-sm" style={{ background: '#fff8e6', color: '#8a6d14', border: '1px solid #ffd970' }}>
+             This workflow has been archived. No new submissions are accepted. Historical requests are preserved.
+           </div>
+         )}
+
+         <p className="text-xs text-[--text-muted]">
+           Created {new Date(workflow.createdAt).toLocaleDateString()}
+           {hasSlots && <> &middot; {workflow.slots!.length} slot{workflow.slots!.length !== 1 ? 's' : ''}</>}
+           {!hasSlots && hasSteps && <> &middot; {workflow.steps!.length} step{workflow.steps!.length !== 1 ? 's' : ''}</>}
+           {hasColumns && <> &middot; {workflow.columns!.length} field{workflow.columns!.length !== 1 ? 's' : ''}</>}
+         </p>
+       </div>
+
+       {/* Submission Instructions */}
+       {workflow.instructions && (
+         <div className="surface p-6 mb-6" style={{ borderLeft: '3px solid var(--accent)' }}>
+           <h3 className="text-sm font-semibold text-[--text] mb-2 uppercase tracking-wider">Instructions</h3>
+           <p className="text-sm text-[--text-muted] whitespace-pre-wrap">{workflow.instructions}</p>
+         </div>
+       )}
 
       {/* Display Columns (read-only) */}
       {hasColumns && !showSubmitForm && (
@@ -461,9 +491,16 @@ export default function WorkflowDetail() {
       <div className="flex gap-3">
         {!showSubmitForm ? (
           <>
-            <button className="primary-button" onClick={handleOpenForm}>
-              Submit Approval Request
-            </button>
+            {isActive && (
+              <button className="primary-button" onClick={handleOpenForm}>
+                Submit Approval Request
+              </button>
+            )}
+            {!isActive && (
+              <button className="primary-button" disabled title="Only active workflows accept submissions">
+                Submit Approval Request
+              </button>
+            )}
             {isAdmin && (
               <button className="secondary-button" onClick={() => navigate(`/workflows/${id}/edit`)}>
                 Edit Workflow

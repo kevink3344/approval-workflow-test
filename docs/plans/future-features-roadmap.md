@@ -8,7 +8,7 @@
 
 ## Overview
 
-This document outlines five high-impact features and one bonus improvement for the approval workflow application. Each feature can be implemented independently and is presented with its own data model, API endpoints, frontend components, and testing strategy. Features are ordered from highest to lowest priority.
+This document outlines nine high-impact features and one bonus improvement for the approval workflow application. Each feature can be implemented independently and is presented with its own data model, API endpoints, frontend components, and testing strategy. Features are ordered from highest to lowest priority.
 
 ---
 
@@ -21,6 +21,10 @@ This document outlines five high-impact features and one bonus improvement for t
 | 3 | Dashboard Analytics & Reporting | Medium | Medium | Charts and metrics for approval trends, bottlenecks, and personal stats. |
 | 4 | Bulk Actions | Medium | Small | Multi-select and batch-approve/reject from the Dashboard. |
 | 5 | Request Templates & Duplicate | Low | Small | Save and reuse past request submissions as templates. |
+| 6 | Auto-Expiry & SLA Deadlines | Medium | Medium | Workflows auto-cancel or escalate requests that exceed time limits. |
+| 7 | Conditional Approval Routing | Medium | Medium | Route requests to different approval chains based on form field values. |
+| 8 | Rich Text & Markdown Descriptions | Low | Small | Support formatted text in workflow descriptions, comments, and step comments. |
+| 9 | API Keys & Webhooks | Medium | Medium | Programmatic access for integrations; real-time event delivery via webhooks. |
 | B | Audit Log / Activity Feed | Bonus | Medium | Immutable record of every action in the system. |
 
 ---
@@ -535,6 +539,461 @@ Logging failures should be caught and logged to the server console but **must no
 
 ---
 
+## Feature 6: Auto-Expiry & SLA Deadlines
+
+### Overview
+
+Allow administrators to set expiration deadlines on workflows. When a request has been pending at a step beyond the deadline, the system can automatically cancel the request or escalate it to an alternate approver. This prevents requests from stalling indefinitely and enforces service-level agreements (SLAs).
+
+### Data Model
+
+#### Modified Table: `workflows` (add columns)
+
+| Column | Type | Description |
+|--------|------|-------------|
+| `expiry_enabled` | INTEGER (0/1) | Whether auto-expiry is active for this workflow. Default 0. |
+| `expiry_hours` | INTEGER (nullable) | Hours after submission before the entire request expires. |
+| `escalation_enabled` | INTEGER (0/1) | Whether to escalate stuck steps. Default 0. |
+| `escalation_hours` | INTEGER (nullable) | Hours a step can remain pending before escalation. |
+| `escalation_group_id` | TEXT (nullable, FK → approval_groups.id) | Group to escalate to when a step times out. |
+
+#### New Table: `request_deadlines`
+
+| Column | Type | Description |
+|--------|------|-------------|
+| `id` | TEXT (UUID) | Primary key |
+| `request_id` | TEXT (FK → approval_requests.id) | The request |
+| `step_id` | TEXT (nullable, FK → approval_steps.id) | The specific step (null for request-level deadline) |
+| `deadline_type` | TEXT | `'expiry'` or `'escalation'` |
+| `deadline_at` | TEXT (ISO 8601) | When the deadline triggers |
+| `is_triggered` | INTEGER (0/1) | Whether the deadline has already fired |
+| `triggered_at` | TEXT (nullable, ISO 8601) | When it fired |
+
+```sql
+-- Add columns to workflows (existing table migration)
+ALTER TABLE workflows ADD COLUMN expiry_enabled INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE workflows ADD COLUMN expiry_hours INTEGER;
+ALTER TABLE workflows ADD COLUMN escalation_enabled INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE workflows ADD COLUMN escalation_hours INTEGER;
+ALTER TABLE workflows ADD COLUMN escalation_group_id TEXT REFERENCES approval_groups(id);
+
+CREATE TABLE IF NOT EXISTS request_deadlines (
+  id            TEXT PRIMARY KEY,
+  request_id    TEXT NOT NULL REFERENCES approval_requests(id) ON DELETE CASCADE,
+  step_id       TEXT REFERENCES approval_steps(id) ON DELETE CASCADE,
+  deadline_type TEXT NOT NULL CHECK(deadline_type IN ('expiry', 'escalation')),
+  deadline_at   TEXT NOT NULL,
+  is_triggered  INTEGER NOT NULL DEFAULT 0,
+  triggered_at  TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_request_deadlines_pending
+  ON request_deadlines(deadline_at, is_triggered);
+```
+
+### Background Job
+
+A lightweight scheduled check runs every 5 minutes (via `setInterval` in the server process, or a separate cron job):
+
+1. Query `request_deadlines` where `deadline_at <= now` AND `is_triggered = 0`.
+2. For each overdue deadline:
+   - **Expiry:** Set the request status to `cancelled`, add a system comment noting the expiry.
+   - **Escalation:** Create a new approval step for the escalation group, mark the overdue step as `skipped`.
+3. Mark `is_triggered = 1`, `triggered_at = now`.
+4. Create notifications for all affected users.
+
+### API Endpoints
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `PATCH` | `/api/workflows/:id` | Updated to accept `expiryEnabled`, `expiryHours`, `escalationEnabled`, `escalationHours`, `escalationGroupId`. |
+| `GET` | `/api/requests/:id/deadlines` | Get all deadlines for a request (expiry + per-step escalation). |
+
+### Frontend
+
+- **Workflow Edit Page:** New "SLA & Deadlines" section with:
+  - Toggle: "Enable auto-expiry" → shows hours input.
+  - Toggle: "Enable escalation" → shows hours input + group selector.
+- **Request Detail Page:** Deadline countdown timer displayed when applicable (e.g., "Expires in 3h 22m" or "Escalates in 1h 15m").
+- **Dashboard:** Visual indicator (yellow/orange badge) on requests approaching their deadline.
+
+### Implementation Order
+
+1. Add migration columns and `request_deadlines` table to seed script.
+2. Add TypeScript types.
+3. Update `workflowService.updateWorkflow()` to handle new fields.
+4. Create `deadlineService.ts` with `scheduleDeadlines()` and `checkOverdue()`.
+5. Start the background check loop in `index.ts`.
+6. Update workflow edit UI with SLA section.
+7. Add deadline display to request detail and dashboard.
+8. Test: create a workflow with a 1-hour expiry, submit a request, verify auto-cancellation.
+
+### Testing Checklist
+
+- [ ] Admin can set expiry/escalation on a workflow via PATCH
+- [ ] Submitting a request creates `request_deadlines` entries for each configured deadline
+- [ ] Background check fires overdue deadlines and updates request/step status
+- [ ] Expired request is marked `cancelled` with a system comment
+- [ ] Escalated step creates a new step for the escalation group
+- [ ] Deadline countdown displays correctly on request detail
+- [ ] Approaching-deadline indicators appear on Dashboard
+- [ ] Background check handles empty/no-overdue gracefully
+
+---
+
+## Feature 7: Conditional Approval Routing
+
+### Overview
+
+Route approval requests through different approval chains based on the values of custom fields. For example, an expense report under $1,000 goes to the manager only, while one over $1,000 also routes to finance. This eliminates the need for separate workflows for every threshold.
+
+### Data Model
+
+#### New Table: `workflow_routing_rules`
+
+| Column | Type | Description |
+|--------|------|-------------|
+| `id` | TEXT (UUID) | Primary key |
+| `workflow_id` | TEXT (FK → workflows.id) | Parent workflow |
+| `name` | TEXT | Display label (e.g., "Under $1,000") |
+| `priority` | INTEGER | Evaluation order (lower = checked first) |
+| `conditions` | TEXT (JSON) | Array of conditions (see below) |
+| `slot_overrides` | TEXT (JSON) | Approval slots to use when conditions match |
+| `is_default` | INTEGER (0/1) | Fallback route when no conditions match |
+| `created_at` | TEXT (ISO 8601) | |
+
+**Conditions JSON format:**
+
+```json
+[
+  {
+    "columnId": "abc123",
+    "operator": "greater_than",
+    "value": "1000"
+  },
+  {
+    "columnId": "def456",
+    "operator": "equals",
+    "value": "Engineering"
+  }
+]
+```
+
+**Supported operators:** `equals`, `not_equals`, `greater_than`, `less_than`, `greater_than_or_equal`, `less_than_or_equal`, `contains`, `in` (for choice fields), `is_empty`, `is_not_empty`.
+
+```sql
+CREATE TABLE IF NOT EXISTS workflow_routing_rules (
+  id             TEXT PRIMARY KEY,
+  workflow_id    TEXT NOT NULL REFERENCES workflows(id) ON DELETE CASCADE,
+  name           TEXT NOT NULL,
+  priority       INTEGER NOT NULL DEFAULT 0,
+  conditions     TEXT NOT NULL DEFAULT '[]',
+  slot_overrides TEXT NOT NULL DEFAULT '[]',
+  is_default     INTEGER NOT NULL DEFAULT 0,
+  created_at     TEXT NOT NULL DEFAULT (datetime('now'))
+);
+```
+
+### Routing Logic
+
+When a request is submitted:
+
+1. Load all routing rules for the workflow, ordered by `priority ASC`.
+2. For each rule, evaluate ALL conditions against the submitted field values.
+3. If all conditions match, use that rule's `slot_overrides` as the approval chain.
+4. If no rule matches, use the workflow's default slots.
+5. The `is_default` rule (if any) acts as a catch-all.
+
+### API Endpoints
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `GET` | `/api/workflows/:id/routing-rules` | List routing rules for a workflow. |
+| `POST` | `/api/workflows/:id/routing-rules` | Create a routing rule. Body: `{ name, priority, conditions, slotOverrides, isDefault }`. |
+| `PATCH` | `/api/workflows/:id/routing-rules/:ruleId` | Update a routing rule. |
+| `DELETE` | `/api/workflows/:id/routing-rules/:ruleId` | Delete a routing rule. |
+
+### Frontend
+
+- **Workflow Edit Page:** New "Routing Rules" tab/section below the slot builder.
+  - List of rules with drag-to-reorder priority.
+  - "Add Rule" opens a panel: rule name, condition builder (column → operator → value), slot overrides (same slot builder as the workflow).
+  - "Default" toggle to mark one rule as the catch-all.
+- **Submission Flow:** Transparent to the user — the correct chain is selected automatically based on their form input.
+- **Request Detail Page:** Shows which routing rule was applied (e.g., "Route: Over $1,000 — Finance Review").
+
+### Implementation Order
+
+1. Add `workflow_routing_rules` table to seed script.
+2. Add TypeScript types.
+3. Create `routingService.ts` with `evaluateRules()`.
+4. Update `approvalService.submitApproval()` to call routing evaluation and use overridden slots.
+5. Create routes + controller for routing rules CRUD.
+6. Add routing rule UI to `WorkflowEdit.tsx`.
+7. Add "applied rule" display to `WorkflowDetail.tsx`.
+8. Test: create rules, submit requests with different values, verify correct chain.
+
+### Testing Checklist
+
+- [ ] Routing rules are created, read, updated, and deleted correctly
+- [ ] `greater_than`/`less_than` operators work with numeric field values
+- [ ] `equals`/`contains` operators work with text field values
+- [ ] `in` operator works with choice field values
+- [ ] Multiple conditions are AND-ed together correctly
+- [ ] Rules are evaluated in priority order; first match wins
+- [ ] Default rule is used when no conditions match
+- [ ] Slot overrides are applied correctly on submission
+- [ ] Request detail shows which routing rule was applied
+- [ ] Workflow without routing rules falls back to default slots
+
+---
+
+## Feature 8: Rich Text & Markdown Descriptions
+
+### Overview
+
+Upgrade plain-text description fields (workflow descriptions, approval step comments, request comments) to support rich text via Markdown. Users can format their text with headings, bold, italic, lists, links, and code blocks. A live preview toggle lets users see the rendered output before saving.
+
+### Dependencies
+
+- **Client:** `react-markdown` + `remark-gfm` for rendering; a lightweight Markdown editor component.
+- **Server:** No schema changes needed — existing TEXT columns already store arbitrary strings; Markdown is just a formatting convention.
+
+### Frontend Changes
+
+**New dependency:** `react-markdown` (lightweight, ~15KB gzipped).
+
+```bash
+npm install react-markdown remark-gfm
+```
+
+**New Component: `MarkdownEditor.tsx`**
+
+- Tabbed interface: "Write" (textarea) / "Preview" (rendered Markdown).
+- Toolbar with common formatting buttons (bold, italic, link, list, heading) that insert Markdown syntax.
+- Props: `value`, `onChange`, `placeholder`, `minHeight`.
+
+**Updated Components:**
+
+| Component | Change |
+|-----------|--------|
+| `WorkflowEdit.tsx` | Replace description `<textarea>` with `<MarkdownEditor>`. |
+| `WorkflowDetail.tsx` | Render workflow description and step comments with `<ReactMarkdown>`. |
+| `Dashboard.tsx` | Render approval step comments (the comment field when approving/rejecting) with `<ReactMarkdown>`. |
+| Comment thread (Feature 2) | Use `<MarkdownEditor>` for comment input; render comments with `<ReactMarkdown>`. |
+
+### API Changes
+
+None. The server stores and returns the raw Markdown string. Rendering is client-side only.
+
+### Implementation Order
+
+1. Install `react-markdown` and `remark-gfm` in the client.
+2. Build `MarkdownEditor.tsx` component.
+3. Update `WorkflowEdit.tsx` description field.
+4. Update `WorkflowDetail.tsx` to render descriptions with Markdown.
+5. Update `Dashboard.tsx` step comment rendering.
+6. (When Feature 2 is built) use `MarkdownEditor` for comment input.
+7. Test: write Markdown, toggle preview, verify rendering.
+
+### Testing Checklist
+
+- [ ] Markdown editor renders with Write/Preview tabs
+- [ ] Toolbar buttons insert correct Markdown syntax
+- [ ] Preview renders headings, bold, italic, lists, links, code blocks correctly
+- [ ] Workflow description renders as formatted Markdown on detail page
+- [ ] Step comments render as formatted Markdown on Dashboard
+- [ ] Raw Markdown is stored correctly in the database (no corruption)
+- [ ] XSS: raw HTML in Markdown is not rendered (react-markdown sanitizes by default)
+- [ ] Empty/plain-text content degrades gracefully (no broken rendering)
+
+---
+
+## Feature 9: API Keys & Webhooks
+
+### Overview
+
+Enable programmatic access to the approval system via API keys, and allow external services to receive real-time event notifications via webhooks. This opens integration with external tools (Slack, Teams, Zapier, custom scripts, CI/CD pipelines).
+
+### Data Model
+
+#### New Table: `api_keys`
+
+| Column | Type | Description |
+|--------|------|-------------|
+| `id` | TEXT (UUID) | Primary key |
+| `user_id` | TEXT (FK → users.id) | Owner of the key |
+| `name` | TEXT | Human-readable label (e.g., "CI/CD Pipeline") |
+| `key_hash` | TEXT | SHA-256 hash of the API key (never store raw key) |
+| `key_prefix` | TEXT | First 8 characters for identification (e.g., `ak_abc123...`) |
+| `scopes` | TEXT (JSON) | Array of permitted scopes: `["read:workflows", "submit:requests"]` |
+| `last_used_at` | TEXT (nullable) | Last usage timestamp |
+| `expires_at` | TEXT (nullable) | Expiration date |
+| `is_active` | INTEGER (0/1) | Whether the key is enabled |
+| `created_at` | TEXT (ISO 8601) | |
+
+#### New Table: `webhook_subscriptions`
+
+| Column | Type | Description |
+|--------|------|-------------|
+| `id` | TEXT (UUID) | Primary key |
+| `user_id` | TEXT (FK → users.id) | Owner |
+| `name` | TEXT | Label |
+| `url` | TEXT | Target URL to POST events to |
+| `secret` | TEXT | HMAC secret for signature verification |
+| `events` | TEXT (JSON) | Array of event types to subscribe to |
+| `is_active` | INTEGER (0/1) | Whether the webhook is enabled |
+| `last_delivery_at` | TEXT (nullable) | Last delivery attempt timestamp |
+| `last_delivery_status` | TEXT (nullable) | `'success'` or `'failed'` |
+| `created_at` | TEXT (ISO 8601) | |
+
+#### New Table: `webhook_deliveries`
+
+| Column | Type | Description |
+|--------|------|-------------|
+| `id` | TEXT (UUID) | Primary key |
+| `subscription_id` | TEXT (FK → webhook_subscriptions.id) | Parent subscription |
+| `event_type` | TEXT | The event that triggered this delivery |
+| `payload` | TEXT (JSON) | The full event payload that was sent |
+| `response_status` | INTEGER (nullable) | HTTP status code from the target |
+| `response_body` | TEXT (nullable) | Response body from the target |
+| `error_message` | TEXT (nullable) | Error detail if delivery failed |
+| `duration_ms` | INTEGER (nullable) | Round-trip time |
+| `attempted_at` | TEXT (ISO 8601) | When delivery was attempted |
+
+```sql
+CREATE TABLE IF NOT EXISTS api_keys (
+  id           TEXT PRIMARY KEY,
+  user_id      TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  name         TEXT NOT NULL,
+  key_hash     TEXT NOT NULL UNIQUE,
+  key_prefix   TEXT NOT NULL,
+  scopes       TEXT NOT NULL DEFAULT '["read:workflows"]',
+  last_used_at TEXT,
+  expires_at   TEXT,
+  is_active    INTEGER NOT NULL DEFAULT 1,
+  created_at   TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE TABLE IF NOT EXISTS webhook_subscriptions (
+  id                  TEXT PRIMARY KEY,
+  user_id             TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  name                TEXT NOT NULL,
+  url                 TEXT NOT NULL,
+  secret              TEXT NOT NULL,
+  events              TEXT NOT NULL DEFAULT '["request.*"]',
+  is_active           INTEGER NOT NULL DEFAULT 1,
+  last_delivery_at    TEXT,
+  last_delivery_status TEXT,
+  created_at          TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE TABLE IF NOT EXISTS webhook_deliveries (
+  id              TEXT PRIMARY KEY,
+  subscription_id TEXT NOT NULL REFERENCES webhook_subscriptions(id) ON DELETE CASCADE,
+  event_type      TEXT NOT NULL,
+  payload         TEXT NOT NULL,
+  response_status INTEGER,
+  response_body   TEXT,
+  error_message   TEXT,
+  duration_ms     INTEGER,
+  attempted_at    TEXT NOT NULL DEFAULT (datetime('now'))
+);
+```
+
+### API Key Authentication
+
+API keys are passed via the `Authorization` header using a custom scheme:
+
+```
+Authorization: Bearer ak_abc123def456...
+```
+
+A new middleware `requireApiKey` validates the key, looks up the user, checks scopes, and attaches `req.user` (same as JWT auth). API keys bypass the normal login flow — they are stateless.
+
+**Scopes:**
+
+| Scope | Allows |
+|-------|--------|
+| `read:workflows` | List and view workflows |
+| `write:workflows` | Create and update workflows |
+| `submit:requests` | Submit approval requests |
+| `read:requests` | View approval requests and their status |
+| `approve:requests` | Approve or reject steps |
+| `admin:*` | All admin operations |
+
+### Webhook Events
+
+| Event | Payload |
+|-------|---------|
+| `request.submitted` | `{ requestId, workflowId, workflowName, requesterId, requesterName, fields, timestamp }` |
+| `request.approved` | `{ requestId, workflowId, workflowName, stepId, approverId, approverName, timestamp }` |
+| `request.rejected` | `{ requestId, workflowId, workflowName, stepId, approverId, approverName, comment, timestamp }` |
+| `request.cancelled` | `{ requestId, workflowId, workflowName, timestamp }` |
+| `request.expired` | `{ requestId, workflowId, workflowName, timestamp }` |
+| `step.escalated` | `{ requestId, workflowId, stepId, escalatedToGroupId, timestamp }` |
+
+**Delivery:** Webhooks are delivered asynchronously (fire-and-forget, non-blocking) with:
+- `X-Webhook-Signature` header (HMAC-SHA256 of the payload using the subscription secret).
+- Retry up to 3 times with exponential backoff (1s, 5s, 25s) on failure.
+- All delivery attempts logged to `webhook_deliveries`.
+
+### API Endpoints
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `POST` | `/api/api-keys` | Create a new API key. Returns the full key ONCE (never stored, only shown at creation). |
+| `GET` | `/api/api-keys` | List user's API keys (shows prefix, name, scopes, last used — never the full key). |
+| `DELETE` | `/api/api-keys/:id` | Revoke an API key. |
+| `POST` | `/api/webhooks` | Create a webhook subscription. |
+| `GET` | `/api/webhooks` | List user's webhook subscriptions. |
+| `PATCH` | `/api/webhooks/:id` | Update a webhook subscription. |
+| `DELETE` | `/api/webhooks/:id` | Delete a webhook subscription. |
+| `GET` | `/api/webhooks/:id/deliveries` | List recent delivery attempts for a webhook. |
+
+### Frontend
+
+- **Settings Page:** New "API Keys" section.
+  - List of existing keys (prefix, name, scopes, last used, status).
+  - "Generate New Key" button → modal with name, scope checkboxes, optional expiry.
+  - After creation, show the full key once with a "Copy" button and warning: "Store this securely. You won't see it again."
+  - "Revoke" button with confirmation.
+- **Settings Page:** New "Webhooks" section.
+  - List of subscriptions (name, URL, events, status, last delivery).
+  - "Add Webhook" form: name, URL, event type checkboxes.
+  - "Test" button to send a ping event.
+  - Delivery log table (expandable to see payload and response).
+
+### Implementation Order
+
+1. Add tables to seed script.
+2. Add TypeScript types.
+3. Create `apiKeyService.ts` with `generateKey()`, `validateKey()`, `revokeKey()`.
+4. Create `requireApiKey` middleware.
+5. Create `webhookService.ts` with `createSubscription()`, `deliverEvent()`.
+6. Hook `webhookService.deliverEvent()` into all mutation points (submit, approve, reject, cancel, expire).
+7. Create routes + controllers for API keys and webhooks.
+8. Add API key management UI to Settings page.
+9. Add webhook management UI to Settings page.
+10. Test: create key, use it to submit a request, verify webhook delivery.
+
+### Testing Checklist
+
+- [ ] `POST /api/api-keys` creates a key and returns it once
+- [ ] `GET /api/api-keys` lists keys without exposing the full key
+- [ ] `DELETE /api/api-keys/:id` revokes the key (subsequent requests with it return 401)
+- [ ] API key auth works with `Authorization: Bearer ak_...` header
+- [ ] Scopes are enforced (e.g., `read:workflows` key cannot submit requests)
+- [ ] `POST /api/webhooks` creates a subscription with a generated secret
+- [ ] Webhook delivers `request.submitted` event to target URL on submission
+- [ ] Webhook signature header is valid (HMAC-SHA256)
+- [ ] Failed deliveries are retried up to 3 times
+- [ ] `GET /api/webhooks/:id/deliveries` shows delivery history
+- [ ] "Test" button sends a ping event successfully
+- [ ] API key and webhook UIs are functional on Settings page
+
+---
+
 ## Consolidated Implementation Priority
 
 If implementing all features, the recommended order is:
@@ -542,11 +1001,15 @@ If implementing all features, the recommended order is:
 1. **Comments** (Feature 2) — highest user impact, enables collaboration.
 2. **Email Notifications** (Feature 1) — essential for real-world adoption.
 3. **Bulk Actions** (Feature 4) — quick win, small effort, high ROI for power users.
-4. **Dashboard Analytics** (Feature 3) — valuable but depends on having enough data.
-5. **Audit Log** (Bonus) — important for compliance, can be added incrementally.
-6. **Request Templates** (Feature 5) — nice-to-have, lower urgency.
+4. **Rich Text & Markdown** (Feature 8) — quick win, small effort, improves UX across the app.
+5. **Dashboard Analytics** (Feature 3) — valuable but depends on having enough data.
+6. **Auto-Expiry & SLA Deadlines** (Feature 6) — important for production reliability.
+7. **Conditional Approval Routing** (Feature 7) — powerful automation, builds on existing slot system.
+8. **API Keys & Webhooks** (Feature 9) — unlocks integrations, requires stable API surface.
+9. **Audit Log** (Bonus) — important for compliance, can be added incrementally.
+10. **Request Templates** (Feature 5) — nice-to-have, lower urgency.
 
-Each feature is independent and can be built in isolation. The only shared dependency is the **User Notifications** system (Feature 1 and Feature 2 add new notification types that depend on the notifications table and service created in `user-notifications.md`).
+Each feature is independent and can be built in isolation. The only shared dependency is the **User Notifications** system (Feature 1 and Feature 2 add new notification types that depend on the notifications table and service created in `user-notifications.md`). Feature 8 (Rich Text) has no server dependencies and can be built at any time. Feature 6 (Auto-Expiry) requires a background job runner. Feature 9 (API Keys & Webhooks) depends on the API surface being stable.
 
 ---
 
@@ -561,3 +1024,11 @@ Each feature is independent and can be built in isolation. The only shared depen
 4. **Audit log retention:** Should audit logs be automatically purged after a certain period (e.g., 1 year)? **Proposed:** No automatic purge initially. Add a manual "Purge logs older than X" admin action if storage becomes a concern.
 
 5. **Template sharing:** Should users be able to share templates with specific teammates, or only admin-created "shared" templates? **Proposed:** Start with owner-only + admin-shared. Team-level sharing can be a future enhancement.
+
+6. **SLA background job:** Should the deadline checker run in-process (setInterval in the Node server) or as a separate cron job? **Proposed:** Start with in-process setInterval for simplicity. Extract to a separate worker if the server scales to multiple instances.
+
+7. **Conditional routing UI complexity:** The condition builder could become complex with nested AND/OR logic. Should v1 support only flat AND conditions? **Proposed:** Start with flat AND-only conditions. Add OR groups and nested logic in v2 if user demand warrants it.
+
+8. **API key scope granularity:** Should scopes be per-workflow (e.g., `submit:requests:workflow-123`) or global? **Proposed:** Start with global scopes. Per-workflow scoping can be added later if needed for multi-tenant or sensitive workflows.
+
+9. **Webhook retry policy:** Should failed webhooks be retried indefinitely or have a cap? **Proposed:** Cap at 3 retries with exponential backoff. After 3 failures, disable the subscription and notify the owner. Manual re-enable required.

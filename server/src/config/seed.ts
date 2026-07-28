@@ -45,7 +45,7 @@ async function seed() {
       name TEXT NOT NULL,
       description TEXT NOT NULL DEFAULT '',
       created_by TEXT NOT NULL REFERENCES users(id),
-      status TEXT NOT NULL DEFAULT 'active' CHECK(status IN ('active','archived')),
+      status TEXT NOT NULL DEFAULT 'draft' CHECK(status IN ('draft','active','archived')),
       organization_id TEXT REFERENCES organizations(id) ON DELETE CASCADE,
       created_at TEXT NOT NULL DEFAULT (datetime('now')),
       updated_at TEXT NOT NULL DEFAULT (datetime('now'))
@@ -108,6 +108,19 @@ async function seed() {
   `);
 
   await client.execute(`
+    CREATE TABLE IF NOT EXISTS workflow_categories (
+      id              TEXT PRIMARY KEY DEFAULT (lower(hex(randomblob(16)))),
+      name            TEXT NOT NULL,
+      is_active       INTEGER NOT NULL DEFAULT 1,
+      sort_order      INTEGER NOT NULL DEFAULT 0,
+      organization_id TEXT NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+      created_at      TEXT NOT NULL DEFAULT (datetime('now')),
+      updated_at      TEXT NOT NULL DEFAULT (datetime('now')),
+      UNIQUE(organization_id, name)
+    )
+  `);
+
+  await client.execute(`
     CREATE TABLE IF NOT EXISTS approval_steps (
       id TEXT PRIMARY KEY DEFAULT (lower(hex(randomblob(16)))),
       request_id TEXT NOT NULL REFERENCES approval_requests(id) ON DELETE CASCADE,
@@ -158,6 +171,9 @@ async function seed() {
 
   await ensureColumns('workflows', [
     { name: 'organization_id', ddl: 'organization_id TEXT REFERENCES organizations(id) ON DELETE CASCADE' },
+    { name: 'category', ddl: "category TEXT NOT NULL DEFAULT 'Other'" },
+    { name: 'category_id', ddl: 'category_id TEXT REFERENCES workflow_categories(id) ON DELETE SET NULL' },
+    { name: 'instructions', ddl: 'instructions TEXT' },
   ]);
 
   await ensureColumns('approval_groups', [
@@ -282,6 +298,124 @@ async function seed() {
       args: [defaultOrgId, orphanRow.id as string],
     });
     console.log(`Assigned existing user ${orphanRow.email} to Default Organization`);
+  }
+
+  // ── Update workflow status constraint to include draft ──────────
+  try {
+    const schemaResult = await client.execute("SELECT sql FROM sqlite_master WHERE type='table' AND name='workflows'");
+    if (schemaResult.rows.length > 0) {
+      const schema = (schemaResult.rows[0] as Record<string, unknown>).sql as string;
+      if (!schema.includes("'draft'")) {
+        console.log('[migrations] Updating workflows status constraint to include draft...');
+        await client.execute("PRAGMA foreign_keys = OFF");
+
+        // Recreate workflows table with updated constraint + category_id
+        await client.execute(`
+          CREATE TABLE workflows_new (
+            id TEXT PRIMARY KEY DEFAULT (lower(hex(randomblob(16)))),
+            name TEXT NOT NULL,
+            description TEXT NOT NULL DEFAULT '',
+            created_by TEXT NOT NULL REFERENCES users(id),
+            status TEXT NOT NULL DEFAULT 'draft' CHECK(status IN ('draft','active','archived')),
+            category TEXT NOT NULL DEFAULT 'Other',
+            category_id TEXT REFERENCES workflow_categories(id) ON DELETE SET NULL,
+            instructions TEXT,
+            organization_id TEXT REFERENCES organizations(id) ON DELETE CASCADE,
+            created_at TEXT NOT NULL DEFAULT (datetime('now')),
+            updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+          )
+        `);
+
+        const wfRows = await client.execute("SELECT * FROM workflows");
+        for (const row of wfRows.rows) {
+          const r = row as Record<string, unknown>;
+          await client.execute({
+            sql: `INSERT INTO workflows_new (id, name, description, created_by, status, category, category_id, instructions, organization_id, created_at, updated_at)
+                  VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+            args: [
+              r.id as string,
+              r.name as string,
+              (r.description as string) || '',
+              r.created_by as string,
+              (r.status as string) || 'active',
+              (r.category as string) || 'Other',
+              (r as any).category_id ?? null,
+              (r.instructions as string) || null,
+              (r.organization_id as string) || null,
+              r.created_at as string,
+              (r.updated_at as string) || (r.created_at as string),
+            ],
+          });
+        }
+
+        await client.execute("DROP TABLE workflows");
+        await client.execute("ALTER TABLE workflows_new RENAME TO workflows");
+        await client.execute("PRAGMA foreign_keys = ON");
+        console.log('[migrations] Workflows table recreated with updated status constraint + new columns.');
+      }
+    }
+  } catch (err) {
+    try { await client.execute("PRAGMA foreign_keys = ON"); } catch {}
+    console.log('[migrations] Note: workflows table migration error (may be ok if already migrated):', (err as Error).message);
+  }
+
+  // ── Seed default workflow categories ──────────────────────────
+  const seededCategories = [
+    { name: 'Finance', sortOrder: 1 },
+    { name: 'HR', sortOrder: 2 },
+    { name: 'IT', sortOrder: 3 },
+    { name: 'Legal', sortOrder: 4 },
+    { name: 'Operations', sortOrder: 5 },
+    { name: 'Other', sortOrder: 6 },
+  ];
+
+  // Get the default org ID (already resolved above)
+  for (const cat of seededCategories) {
+    const existingCat = await client.execute({
+      sql: 'SELECT id FROM workflow_categories WHERE name = ? AND organization_id = ?',
+      args: [cat.name, defaultOrgId],
+    });
+    if (existingCat.rows.length === 0) {
+      await client.execute({
+        sql: `INSERT INTO workflow_categories (name, is_active, sort_order, organization_id)
+              VALUES (?, 1, ?, ?)`,
+        args: [cat.name, cat.sortOrder, defaultOrgId],
+      });
+      console.log(`Seeded category: ${cat.name}`);
+    }
+  }
+
+  // ── Migrate workflows.category string → category_id FK ─────────
+  const wfWithCategoryText = await client.execute({
+    sql: `SELECT id, category FROM workflows WHERE category IS NOT NULL AND category != ''`,
+    args: [],
+  });
+  for (const wf of wfWithCategoryText.rows) {
+    const wfRow = wf as Record<string, unknown>;
+    const catName = wfRow.category as string;
+    const catResult = await client.execute({
+      sql: 'SELECT id FROM workflow_categories WHERE name = ? AND organization_id = ?',
+      args: [catName, defaultOrgId],
+    });
+    if (catResult.rows.length > 0) {
+      const catId = (catResult.rows[0] as Record<string, unknown>).id as string;
+      const wfId = wfRow.id as string;
+      // Only update if category_id is currently null
+      const currentWf = await client.execute({
+        sql: 'SELECT category_id FROM workflows WHERE id = ?',
+        args: [wfId],
+      });
+      const currentCatId = (currentWf.rows[0] as Record<string, unknown>).category_id;
+      if (!currentCatId) {
+        await client.execute({
+          sql: 'UPDATE workflows SET category_id = ? WHERE id = ?',
+          args: [catId, wfId],
+        });
+      }
+    }
+  }
+  if (wfWithCategoryText.rows.length > 0) {
+    console.log(`Backfilled category_id for ${wfWithCategoryText.rows.length} workflows.`);
   }
 
   // ── Backfill organization_id on existing data tables ───────────

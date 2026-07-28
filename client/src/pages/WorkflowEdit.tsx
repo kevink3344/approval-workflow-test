@@ -9,6 +9,7 @@ import type {
   ApprovalGroup,
   ApprovalSlotConfig,
   ColumnType,
+  WorkflowCategory,
 } from '../types';
 
 interface ColumnDraft {
@@ -53,9 +54,14 @@ export default function WorkflowEdit() {
 
   const { data: workflow, loading, error } = useApi<Workflow>(`/workflows/${id}`);
   const { data: groups } = useApi<ApprovalGroup[]>('/approval-groups');
+  const { data: categories } = useApi<WorkflowCategory[]>('/categories');
+  const activeCategories = categories?.filter(c => c.isActive) ?? [];
 
   const [name, setName] = useState('');
   const [description, setDescription] = useState('');
+  const [status, setStatus] = useState<string>('draft');
+  const [categoryId, setCategoryId] = useState<string>('');
+  const [instructions, setInstructions] = useState('');
   const [slots, setSlots] = useState<ApprovalSlotConfig[]>([]);
   const [columns, setColumns] = useState<ColumnDraft[]>([]);
   const [initialColumnsSignature, setInitialColumnsSignature] = useState('');
@@ -68,6 +74,9 @@ export default function WorkflowEdit() {
     if (workflow && !initialized) {
       setName(workflow.name);
       setDescription(workflow.description);
+      setStatus(workflow.status || 'draft');
+      setCategoryId(workflow.categoryId || '');
+      setInstructions(workflow.instructions || '');
 
       if (workflow.slots && workflow.slots.length > 0) {
         setSlots(
@@ -216,11 +225,17 @@ export default function WorkflowEdit() {
       const payload: {
         name: string;
         description: string;
+        status?: string;
+        categoryId?: string | null;
+        instructions?: string | null;
         slots: ApprovalSlotConfig[];
         columns?: ColumnDraft[];
       } = {
         name,
         description,
+        status,
+        categoryId: categoryId || null,
+        instructions: instructions || null,
         slots,
       };
 
@@ -295,27 +310,69 @@ export default function WorkflowEdit() {
       )}
 
       <form onSubmit={handleSubmit}>
-        <div className="surface p-6 mb-6">
-          <div className="field mb-4">
-            <label className="field-label">Workflow Name</label>
-            <input
-              className="input-control"
-              placeholder="e.g. Expense Report Approval"
-              value={name}
-              onChange={(e) => setName(e.target.value)}
-              required
-            />
-          </div>
-          <div className="field mb-4">
-            <label className="field-label">Description</label>
-            <textarea
-              className="input-control"
-              placeholder="Describe what this workflow is for..."
-              value={description}
-              onChange={(e) => setDescription(e.target.value)}
-            />
-          </div>
-        </div>
+         <div className="surface p-6 mb-6">
+           <div className="field mb-4">
+             <label className="field-label">Workflow Name</label>
+             <input
+               className="input-control"
+               placeholder="e.g. Expense Report Approval"
+               value={name}
+               onChange={(e) => setName(e.target.value)}
+               required
+             />
+           </div>
+           <div className="field mb-4">
+             <label className="field-label">Description</label>
+             <textarea
+               className="input-control"
+               placeholder="Describe what this workflow is for..."
+               value={description}
+               onChange={(e) => setDescription(e.target.value)}
+             />
+           </div>
+
+           <div className="grid gap-4 sm:grid-cols-2 mb-4">
+             <div className="field">
+               <label className="field-label">Status</label>
+               <select
+                 className="input-control"
+                 value={status}
+                 onChange={(e) => setStatus(e.target.value)}
+               >
+                 <option value="draft">Draft — Not visible to users</option>
+                 <option value="active">Active — Accepting submissions</option>
+                 <option value="archived">Archived — Read-only history</option>
+               </select>
+             </div>
+               <div className="field">
+                 <label className="field-label">Category</label>
+                 <select
+                   className="input-control"
+                   value={categoryId}
+                   onChange={(e) => setCategoryId(e.target.value)}
+                 >
+                   <option value="">— No category —</option>
+                   {activeCategories.map((cat) => (
+                     <option key={cat.id} value={cat.id}>{cat.name}</option>
+                   ))}
+                 </select>
+               </div>
+           </div>
+
+           <div className="field mb-4">
+             <label className="field-label">Submission Instructions</label>
+             <textarea
+               className="input-control"
+               placeholder="Instructions shown to users when they submit a request..."
+               value={instructions}
+               onChange={(e) => setInstructions(e.target.value)}
+               rows={3}
+             />
+             <p className="text-xs text-[--text-muted] mt-1">
+               Optional. This text is displayed at the top of the submission form.
+             </p>
+           </div>
+         </div>
 
         {/* Slot Builder */}
         <div className="surface p-6 mb-6">

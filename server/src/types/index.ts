@@ -13,7 +13,7 @@ export type ApprovalStepStatus =
   | 'rejected'
   | 'skipped';
 
-export type WorkflowStatus = 'active' | 'archived';
+export type WorkflowStatus = 'draft' | 'active' | 'archived';
 
 export type ResolutionMode = 'first' | 'all';
 
@@ -60,6 +60,18 @@ export interface ApprovalGroupMember {
   addedAt: Date;
 }
 
+// ---- Workflow Categories ---- //
+
+export interface WorkflowCategory {
+  id: string;
+  name: string;
+  isActive: boolean;
+  sortOrder: number;
+  organizationId: string;
+  createdAt: Date;
+  updatedAt: Date;
+}
+
 // ---- Workflows (updated) ---- //
 
 export interface Workflow {
@@ -68,6 +80,9 @@ export interface Workflow {
   description: string;
   createdBy: string;
   status: WorkflowStatus;
+  categoryId: string | null;
+  categoryName?: string | null;
+  instructions: string | null;
   organizationId?: string | null;
   createdAt: Date;
   updatedAt: Date;

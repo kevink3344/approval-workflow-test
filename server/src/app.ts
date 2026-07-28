@@ -7,6 +7,7 @@ import approvalRoutes from './routes/approvals';
 import approvalGroupRoutes from './routes/approvalGroups';
 import uploadRoutes from './routes/uploads';
 import adminRoutes from './routes/admin';
+import categoryRoutes from './routes/categories';
 import settingsRoutes from './routes/settings';
 import infoRoutes from './routes/info';
 import organizationRoutes from './routes/organizations';
@@ -31,6 +32,7 @@ app.use('/api/approvals', orgScope, approvalRoutes);
 app.use('/api/approval-groups', orgScope, approvalGroupRoutes);
 app.use('/api/uploads', orgScope, uploadRoutes);
 app.use('/api/admin', orgScope, adminRoutes);
+app.use('/api/categories', orgScope, categoryRoutes);
 app.use('/api/settings', orgScope, settingsRoutes);
 app.use('/api/info', infoRoutes);
 

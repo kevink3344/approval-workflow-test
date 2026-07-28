@@ -41,6 +41,9 @@ const columnSchema = z.object({
 export const createWorkflowSchema = z.object({
   name: z.string().min(1, 'Workflow name is required.'),
   description: z.string().optional().default(''),
+  status: z.enum(['draft', 'active', 'archived']).optional().default('draft'),
+  categoryId: z.string().nullable().optional().default(null),
+  instructions: z.string().nullable().optional().default(null),
   slots: z
     .array(
       z.object({
@@ -56,6 +59,9 @@ export const createWorkflowSchema = z.object({
 export const updateWorkflowSchema = z.object({
   name: z.string().min(1).optional(),
   description: z.string().optional(),
+  status: z.enum(['draft', 'active', 'archived']).optional(),
+  categoryId: z.string().nullable().optional(),
+  instructions: z.string().nullable().optional(),
   slots: z
     .array(
       z.object({
@@ -105,6 +111,19 @@ export const updateApprovalGroupSchema = z.object({
   name: z.string().min(1).optional(),
   description: z.string().optional(),
   memberIds: z.array(z.string().min(1)).min(1).optional(),
+});
+
+// Category schemas
+export const createCategorySchema = z.object({
+  name: z.string().min(1, 'Category name is required.').max(100),
+  isActive: z.boolean().optional().default(true),
+  sortOrder: z.number().int().min(0).optional().default(0),
+});
+
+export const updateCategorySchema = z.object({
+  name: z.string().min(1).max(100).optional(),
+  isActive: z.boolean().optional(),
+  sortOrder: z.number().int().min(0).optional(),
 });
 
 // User update schemas

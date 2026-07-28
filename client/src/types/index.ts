@@ -73,7 +73,7 @@ export interface ApprovalGroup {
 }
 
 // ---- Workflows ---- //
-export type WorkflowStatus = 'active' | 'archived';
+export type WorkflowStatus = 'draft' | 'active' | 'archived';
 export type ResolutionMode = 'first' | 'all';
 export type ColumnType = 'text' | 'long_text' | 'single_choice' | 'multiple_choice' | 'date' | 'file';
 
@@ -110,12 +110,24 @@ export interface WorkflowApprovalSlot {
   };
 }
 
+export interface WorkflowCategory {
+  id: string;
+  name: string;
+  isActive: boolean;
+  sortOrder: number;
+  createdAt: string;
+  updatedAt: string;
+}
+
 export interface Workflow {
   id: string;
   name: string;
   description: string;
   createdBy: string;
   status: WorkflowStatus;
+  categoryId: string | null;
+  categoryName: string | null;
+  instructions: string | null;
   steps?: { id: string; order: number; approverId: string; approverName?: string }[];
   slots?: WorkflowApprovalSlot[];
   columns?: WorkflowColumn[];
