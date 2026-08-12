@@ -102,19 +102,6 @@ export default function Dashboard() {
 
   return (
     <div>
-      {/* Profile card */}
-      <div className="surface p-6 mb-8">
-        <div className="flex items-center gap-4">
-          <div className="w-12 h-12 rounded-full bg-accent flex items-center justify-center text-white font-semibold text-lg">
-            {user?.name?.charAt(0).toUpperCase()}
-          </div>
-          <div>
-            <h2 className="text-lg font-semibold text-[--text]">{user?.name}</h2>
-            <p className="text-sm text-[--text-muted]">{user?.email}</p>
-          </div>
-        </div>
-      </div>
-
       {/* Requests section */}
       <div className="flex items-center justify-between mb-6">
         <h3 className="text-xl font-semibold text-[--text]">My Requests</h3>
